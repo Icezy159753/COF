@@ -1,0 +1,871 @@
+import { useEffect, useMemo, useState } from 'react'
+import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
+import {
+  ArrowLeft, Plus, Trash2, ChevronRight, Layers, Settings2, Wand2,
+  Database, ListTree, Search, Sparkles, Loader2, CornerDownRight, Table2,
+} from 'lucide-react'
+import { useStore, useRawdata, uid } from '../store.jsx'
+import {
+  BOX_META, isWorkBox, detectTextQuestions, newRowCount, findOtherColumn, freqByValue, hasOtherOption, shortSheetName,
+} from '../lib/boxes.js'
+import { uniqueAnswers } from '../lib/answers.js'
+import { aiAssignToFrame } from '../lib/aiGroup.js'
+import { findSameFrameQuestions, valueSignature } from '../lib/spss.js'
+import {
+  Button, Modal, Field, TextInput, EmptyState, ConfirmDelete, BoxBadge, Badge, NewRowsBadge, Toast,
+} from '../components/ui.jsx'
+
+export default function BoxPage() {
+  const { projectId, box } = useParams()
+  const navigate = useNavigate()
+  const { state, addCodeframe, deleteCodeframe, updateProjectBox, markBoxSeen } = useStore()
+  const project = state.projects.find((p) => p.id === projectId)
+  const { rawdata } = useRawdata(projectId)
+
+  const [pickOpen, setPickOpen] = useState(false)
+  const [wizardOpen, setWizardOpen] = useState(false)
+  const [deleting, setDeleting] = useState(null)
+  const [view, setView] = useState('codeframes') // 'codeframes' | 'codebook'
+  const [creating, setCreating] = useState(null) // ข้อความสถานะระหว่างสร้าง codeframe (AI)
+  const [toast, setToast] = useState(null)
+
+  // เปิดกล่องครั้งแรก → ทำเครื่องหมายว่าดูแถวล่าสุดแล้ว (ล้าง badge แถวใหม่)
+  useEffect(() => {
+    if (project?.rawMeta) markBoxSeen(projectId, box)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, box, project?.rawMeta?.rowCount])
+
+  if (!isWorkBox(box)) return <Navigate to={`/projects/${projectId}`} replace />
+  if (!project) {
+    return (
+      <div className="mx-auto max-w-6xl px-5 py-16 text-center text-slate-400">
+        ไม่พบโปรเจกต์นี้ — <Link to="/" className="text-indigo-600 underline">กลับหน้าหลัก</Link>
+      </div>
+    )
+  }
+
+  const meta = BOX_META[box]
+  const boxState = project.boxes[box]
+  const pickedIds = boxState.questionIds
+  const codeframes = state.codeframes.filter((c) => c.projectId === projectId && c.box === box)
+  const raw = project.rawMeta
+  const newRows = newRowCount(project, box)
+  const codebook = project.codebook
+
+  // สร้าง "1 ชีท" จากกลุ่มข้อที่ใช้โครงเดียวกัน (group) + ลง code ปลายปิด + (ทางเลือก) AI จับ 'อื่นๆ'
+  //   onProgress(text) = อัปเดตข้อความสถานะระหว่างเรียก AI
+  //   skipAExternal = true → ไม่เรียก AI จับ 'อื่นๆ' ตอนสร้าง (สร้างไว ๆ แล้วค่อยกด Group เองในแต่ละข้อ)
+  const buildSheetForGroup = async (group, cb, onProgress, { skipAI = false } = {}) => {
+    const codes = cb.values.map((v) => ({
+      id: uid(), codeNo: String(v.value), thai: v.label, thai2: '', eng: '',
+    }))
+    const assignments = {}
+    cb.values.forEach((v, i) => { assignments[String(v.value)] = [codes[i].id] }) // closed pre-coded
+
+    const questionIds = []
+    const otherQs = []
+    for (const q of group) {
+      questionIds.push(q.id)
+      const oq = rawdata ? findOtherColumn(rawdata, q, codebook) : null
+      if (oq) { questionIds.push(oq.id); otherQs.push(oq) }
+    }
+
+    let assignedCount = 0
+    let otherCount = 0
+    if (otherQs.length) {
+      const verbatims = uniqueAnswers(rawdata, otherQs.map((o) => o.id)).filter((a) => a.text.trim())
+      otherCount = verbatims.length
+      if (verbatims.length && !skipAI) {
+        onProgress?.(`AI กำลังจับ ${verbatims.length} คำตอบ 'อื่นๆ' เข้ารหัสเดิม…`)
+        const codeItems = codes.map((c, i) => ({ i, label: c.thai }))
+        const vItems = verbatims.map((a, i) => ({ i, text: a.text, count: a.count }))
+        const { assign } = await aiAssignToFrame(codeItems, vItems)
+        assign.forEach((codeIdx, i) => {
+          if (codeIdx >= 0 && codes[codeIdx]) {
+            assignments[verbatims[i].key] = [codes[codeIdx].id]
+            assignedCount += 1
+          }
+        })
+      }
+    }
+
+    const sheet = {
+      id: uid(),
+      // ชื่อชีท = รหัสสั้น (ดึงรหัสท้ายจากชื่อข้อตัวแทน เช่น "...อร่อย_d4" → "d4")
+      name: shortSheetName(codebook?.byVar?.[group[0]?.label]?.code || group[0]?.label || ''),
+      questionIds,
+      // level 0 = ยังไม่จัด Net (ไม่มีหัวข้อ) — ผู้ใช้ค่อยกด "เพิ่ม Net" จัดเองภายหลัง
+      nets: [{ id: uid(), name: '', level: 0, codes }],
+      assignments,
+    }
+    return { sheet, otherCount, assignedCount }
+  }
+
+  // สร้าง Codeframe จากข้อเดียว (รวมข้อโครงเดียวกันให้)
+  const createFromCode = async (question) => {
+    const cb = codebook?.byVar?.[question.label]
+    if (!cb?.values?.length) return
+    const group = rawdata ? findSameFrameQuestions(codebook, rawdata.questions, question) : [question]
+    const shortName = cb.code || question.label // code สั้นจาก SPSS (ถ้ามี)
+    try {
+      const { sheet, otherCount } = await buildSheetForGroup(group, cb, undefined, { skipAI: true })
+      const cf = addCodeframe({ projectId, box, name: `Codeframe ${shortName}`, sheets: [sheet] })
+      setCreating(null)
+      setToast({
+        type: 'success',
+        title: `สร้าง Codeframe ${shortName} แล้ว`,
+        message:
+          (group.length > 1 ? `รวม ${group.length} ข้อโครงเดียวกัน · ` : '') +
+          `ลงโค้ดปลายปิดอัตโนมัติ` +
+          (otherCount ? ` · มี 'อื่นๆ' ${otherCount} คำตอบรอจัดกลุ่ม (กด "Group อัตโนมัติ" ในข้อ)` : ''),
+        duration: 4000,
+      })
+      navigate(`/projects/${projectId}/${box}/codeframes/${cf.id}`)
+    } catch (err) {
+      setCreating(null)
+      setToast({ type: 'warning', title: 'สร้างไม่สำเร็จ', message: err.message, duration: 8000 })
+    }
+  }
+
+  // ตัวแปรที่ "ไม่ทำ Code" (global) — Auto Codeframe จะข้าม (เทียบแบบไม่สนตัวพิมพ์เล็ก/ใหญ่)
+  const excludedSet = useMemo(
+    () => new Set((state.settings?.excludedVars ?? []).map((v) => v.toLowerCase())),
+    [state.settings],
+  )
+
+  // กลุ่มข้อที่มี "อื่นๆ ระบุ" จัดตามโครง code ที่เหมือนกัน (1 กลุ่ม = 1 ชีท)
+  const autoGroups = useMemo(() => {
+    if (!codebook?.byVar || !rawdata?.questions) return []
+    const cbBy = codebook.byVar
+    const bySig = new Map()
+    for (const q of rawdata.questions) {
+      if (excludedSet.has(String(q.label).toLowerCase())) continue // ข้ามตัวแปรที่ห้ามทำ Code
+      const cb = cbBy[q.label]
+      if (!cb?.values?.length) continue
+      // ดึงมา auto เฉพาะข้อที่ "มีตัวเลือก อื่นๆ ระบุ" จริงในโค้ดบุ๊กเท่านั้น
+      if (!hasOtherOption(cb)) continue
+      const sig = valueSignature(cb.values)
+      if (!bySig.has(sig)) bySig.set(sig, { rep: q, cb, members: [] })
+      bySig.get(sig).members.push(q)
+    }
+    // แต่ละกลุ่ม → ใช้ "ทุกข้อที่โครงเหมือนกัน" (รวมข้อที่ไม่มี other ในโครงเดียวกันด้วย) — ตัดตัวแปรที่ห้ามออก
+    return [...bySig.values()]
+      .map((g) => ({
+        cb: g.cb,
+        questions: findSameFrameQuestions(codebook, rawdata.questions, g.rep)
+          .filter((q) => !excludedSet.has(String(q.label).toLowerCase())),
+        otherMembers: g.members,
+      }))
+      .filter((g) => g.questions.length)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [codebook, rawdata, excludedSet])
+
+  const otherQuestionCount = useMemo(
+    () => autoGroups.reduce((s, g) => s + g.otherMembers.length, 0),
+    [autoGroups],
+  )
+
+  // id ของคอลัมน์ "อื่นๆ ระบุ" (ข้อความ) ทั้งหมด — ใช้ "ไม่นับเป็นข้อ" และไม่โชว์ในชิป
+  const otherColIds = useMemo(() => {
+    const s = new Set()
+    if (!rawdata?.questions || !codebook?.byVar) return s
+    for (const q of rawdata.questions) {
+      if (!codebook.byVar[q.label]?.values?.length) continue
+      const oc = findOtherColumn(rawdata, q, codebook)
+      if (oc) s.add(oc.id)
+    }
+    return s
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [codebook, rawdata])
+
+  // Auto: สร้าง Codeframe เดียว แยกเป็นชีทตามกลุ่มโครง (ทุกข้อที่มี 'อื่นๆ ระบุ')
+  //   "สร้างก่อน ยังไม่จับรหัส" → ไม่เรียก AI ตอนสร้าง (เสร็จทันที) แล้วค่อยกด Group เองในแต่ละข้อ
+  const autoBuildAll = async () => {
+    if (!autoGroups.length) return
+    setCreating('กำลังสร้าง Codeframe…')
+    try {
+      const results = await Promise.all(
+        autoGroups.map((g) => buildSheetForGroup(g.questions, g.cb, undefined, { skipAI: true })),
+      )
+      // คงลำดับชีทตามลำดับกลุ่มเดิม (Promise.all คืนผลตามลำดับ input อยู่แล้ว)
+      const sheets = results.map((r) => r.sheet)
+      const totalOther = results.reduce((s, r) => s + r.otherCount, 0)
+      const cf = addCodeframe({ projectId, box, name: 'CE — อื่นๆ ระบุ (auto)', sheets })
+      setCreating(null)
+      setToast({
+        type: 'success',
+        title: `สร้าง Codeframe อัตโนมัติแล้ว — ${sheets.length} ชีท`,
+        message: `ลงโค้ดปลายปิดให้แล้ว · มี 'อื่นๆ ระบุ' ${totalOther} คำตอบรอจัดกลุ่ม — เปิดแต่ละข้อแล้วกด "Group อัตโนมัติ" ให้ AI จับเข้ารหัส`,
+        duration: 5000,
+      })
+      navigate(`/projects/${projectId}/${box}/codeframes/${cf.id}`)
+    } catch (err) {
+      setCreating(null)
+      setToast({ type: 'warning', title: 'สร้างอัตโนมัติไม่สำเร็จ', message: err.message, duration: 8000 })
+    }
+  }
+
+  return (
+    <div className="mx-auto max-w-6xl px-5 py-8">
+      <Link
+        to={`/projects/${projectId}`}
+        className="mb-4 inline-flex items-center gap-1.5 text-sm font-medium text-slate-500 hover:text-indigo-600"
+      >
+        <ArrowLeft size={15} /> {project.name}
+      </Link>
+
+      <div className="mb-6 flex flex-wrap items-center gap-3">
+        <BoxBadge box={box} />
+        <h1 className="text-2xl font-bold text-slate-900">
+          กล่อง {meta.label} <span className="text-base font-normal text-slate-400">— {meta.desc}</span>
+        </h1>
+        <NewRowsBadge count={newRows} />
+      </div>
+
+      {!raw ? (
+        <EmptyState
+          icon={Layers}
+          title="ยังไม่มี Rawdata"
+          subtitle="กลับไปอัปโหลด Rawdata ที่กล่องศูนย์กลางก่อน จึงจะทำงานกล่องนี้ได้"
+          action={<Button onClick={() => navigate(`/projects/${projectId}`)}>กลับหน้าโปรเจกต์</Button>}
+        />
+      ) : (
+        <>
+          {/* แท็บ: Codeframe | ดูตัวอย่างข้อมูล | โจทย์ & Code */}
+          <div className="mb-5 flex w-fit flex-wrap items-center gap-2 text-xs font-semibold">
+            <button
+              onClick={() => setView('codeframes')}
+              className={`flex cursor-pointer items-center gap-1.5 rounded-xl border px-3 py-2 transition-colors ${
+                view === 'codeframes'
+                  ? 'border-indigo-300 bg-white text-indigo-700 shadow-sm'
+                  : 'border-transparent bg-slate-100 text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              <Layers size={14} /> Codeframe ({codeframes.length})
+            </button>
+            <Link
+              to={`/projects/${projectId}/rawdata`}
+              className="flex cursor-pointer items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-600 hover:border-indigo-300 hover:text-indigo-600"
+            >
+              <Table2 size={14} /> ดูตัวอย่างข้อมูล
+            </Link>
+            <button
+              onClick={() => setView('codebook')}
+              className={`flex cursor-pointer items-center gap-1.5 rounded-xl border px-3 py-2 transition-colors ${
+                view === 'codebook'
+                  ? 'border-indigo-300 bg-white text-indigo-700 shadow-sm'
+                  : 'border-transparent bg-slate-100 text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              <Database size={14} /> โจทย์ &amp; Code{codebook ? ` (${codebook.varCount})` : ''}
+            </button>
+          </div>
+
+          {view === 'codebook' ? (
+            <CodebookViewer
+              codebook={codebook}
+              questions={raw.questions}
+              rawdata={rawdata}
+              creating={creating}
+              onCreate={createFromCode}
+              onGoAttach={() => navigate(`/projects/${projectId}`)}
+            />
+          ) : (
+          <>
+          {/* เลือกชนิดข้อของกล่องนี้ (จุดที่ CE/OE ต่างกัน) */}
+          <div className="mb-5 flex flex-wrap items-center gap-2 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <Settings2 size={16} className="text-slate-400" />
+            <span className="text-sm font-semibold text-slate-700">ข้อที่กล่องนี้ดูแล:</span>
+            {pickedIds.length ? (
+              <>
+                {pickedIds.slice(0, 8).map((qid) => (
+                  <Badge key={qid} color="indigo">
+                    {raw.questions.find((q) => q.id === qid)?.label ?? qid}
+                  </Badge>
+                ))}
+                {pickedIds.length > 8 && <Badge color="indigo">+{pickedIds.length - 8}</Badge>}
+              </>
+            ) : (
+              <span className="text-sm text-rose-500">ยังไม่ได้เลือกข้อ</span>
+            )}
+            <Button variant="secondary" size="sm" className="ml-auto" onClick={() => setPickOpen(true)}>
+              <Settings2 size={14} /> เลือกข้อของกล่อง {meta.label}
+            </Button>
+          </div>
+
+          {/* Auto: สร้าง Codeframe เดียวจากทุกข้อที่มี 'อื่นๆ ระบุ' แยกชีทตามกลุ่มโครง */}
+          {codebook && autoGroups.length > 0 && (
+            <div className="mb-5 flex flex-wrap items-center gap-3 rounded-2xl border border-amber-200 bg-gradient-to-br from-amber-50/70 to-white p-4 shadow-sm">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-100 text-amber-600">
+                <Sparkles size={20} />
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-bold text-slate-800">
+                  พบ {otherQuestionCount} ข้อที่มี "อื่นๆ ระบุ" · {autoGroups.length} กลุ่มโครง
+                </p>
+                <p className="text-xs text-slate-500">
+                  สร้าง Codeframe เดียว แยกเป็น {autoGroups.length} ชีท (ข้อที่ใช้โครงเดียวกันอยู่ชีทเดียวกัน) +
+                  ลงโค้ดปลายปิดอัตโนมัติ — เสร็จทันที แล้วค่อยกด "Group อัตโนมัติ" ให้ AI จับ "อื่นๆ" เองในแต่ละข้อ
+                </p>
+              </div>
+              <Button className="ml-auto shrink-0" disabled={!!creating} onClick={autoBuildAll}>
+                {creating ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
+                {creating ? 'กำลังสร้าง…' : `Auto สร้าง Codeframe (${autoGroups.length} ชีท)`}
+              </Button>
+            </div>
+          )}
+          {creating && (
+            <p className="mb-3 rounded-lg bg-violet-50 px-3 py-1.5 text-xs font-medium text-violet-600">{creating}</p>
+          )}
+
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="flex items-center gap-2 text-sm font-bold tracking-wide text-slate-500 uppercase">
+              <Layers size={16} /> Codeframe ({codeframes.length})
+            </h2>
+            <Button size="sm" onClick={() => setWizardOpen(true)}>
+              <Plus size={14} /> สร้าง Codeframe
+            </Button>
+          </div>
+
+          {codeframes.length === 0 ? (
+            <EmptyState
+              icon={Layers}
+              title="ยังไม่มี Codeframe ในกล่องนี้"
+              subtitle="สร้าง Codeframe โดยเลือกข้อจากที่กล่องนี้ดูแล แล้วกำหนดว่าชีทแรกจะรวมข้อไหนบ้าง"
+              action={
+                <Button onClick={() => setWizardOpen(true)}>
+                  <Plus size={16} /> สร้าง Codeframe
+                </Button>
+              }
+            />
+          ) : (
+            <div className="space-y-3">
+              {codeframes.map((cf) => {
+                const totalCodes = cf.sheets.reduce(
+                  (sum, sh) => sum + sh.nets.reduce((s2, n) => s2 + n.codes.length, 0),
+                  0,
+                )
+                // นับเฉพาะ "ข้อจริง" ไม่รวมคอลัมน์ข้อความ 'อื่นๆ ระบุ'
+                const totalQuestions = new Set(
+                  cf.sheets.flatMap((sh) => sh.questionIds).filter((qid) => !otherColIds.has(qid)),
+                ).size
+                return (
+                  <div
+                    key={cf.id}
+                    className="group relative rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition-all hover:border-indigo-300 hover:shadow-md"
+                  >
+                    <Link to={`/projects/${projectId}/${box}/codeframes/${cf.id}`} className="block">
+                      <div className="flex items-center justify-between gap-2">
+                        <h3 className="text-base font-bold text-slate-900 group-hover:text-indigo-700">
+                          {cf.name}
+                        </h3>
+                        <ChevronRight size={16} className="mr-8 text-slate-300 group-hover:text-indigo-400" />
+                      </div>
+                      <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                        <Badge color="indigo">{cf.sheets.length} ชีท</Badge>
+                        <Badge color="emerald">{totalQuestions} ข้อ</Badge>
+                        <Badge color="amber">{totalCodes} Code</Badge>
+                        <span className="text-slate-300">
+                          สร้างเมื่อ {new Date(cf.createdAt).toLocaleDateString('th-TH')}
+                        </span>
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-1.5">
+                        {cf.sheets.map((sh) => {
+                          // โชวเฉพาะ "ชื่อข้อหลัก" (ไม่รวมคอลัมน์ 'อื่นๆ ระบุ') แบบไม่ซ้ำ
+                          const labels = [...new Set(
+                            sh.questionIds
+                              .filter((qid) => !otherColIds.has(qid))
+                              .map((qid) => raw.questions.find((q) => q.id === qid)?.label ?? qid),
+                          )]
+                          return (
+                            <span
+                              key={sh.id}
+                              className="rounded-lg bg-slate-50 px-2 py-1 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200"
+                            >
+                              {labels.join(', ').toUpperCase() || '—'}
+                            </span>
+                          )
+                        })}
+                      </div>
+                    </Link>
+                    <button
+                      title="ลบ Codeframe"
+                      onClick={() => setDeleting(cf)}
+                      className="absolute top-4 right-4 cursor-pointer rounded-lg p-1.5 text-slate-300 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-rose-50 hover:text-rose-500"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+          </>
+          )}
+        </>
+      )}
+
+      <QuestionPicker
+        open={pickOpen}
+        onClose={() => setPickOpen(false)}
+        box={box}
+        rawdata={rawdata}
+        questions={raw?.questions ?? []}
+        value={pickedIds}
+        onSave={(ids) => updateProjectBox(projectId, box, { questionIds: ids })}
+      />
+
+      <CodeframeWizard
+        open={wizardOpen}
+        onClose={() => setWizardOpen(false)}
+        questions={(raw?.questions ?? []).filter((q) => pickedIds.includes(q.id))}
+        allQuestions={raw?.questions ?? []}
+        onCreate={(sheets, name) => {
+          const cf = addCodeframe({ projectId, box, name, sheets })
+          navigate(`/projects/${projectId}/${box}/codeframes/${cf.id}`)
+        }}
+      />
+
+      <ConfirmDelete
+        open={!!deleting}
+        onClose={() => setDeleting(null)}
+        onConfirm={() => deleteCodeframe(deleting.id)}
+        what={`Codeframe "${deleting?.name}"`}
+      />
+
+      <Toast toast={toast} onClose={() => setToast(null)} />
+    </div>
+  )
+}
+
+// ============================================================
+// แท็บ "โจทย์ & Code": เลือกข้อ → ดู variable label (โจทย์) + value labels (Code)
+//   จาก SPSS codebook และสร้าง Codeframe จาก Code ได้
+// ============================================================
+function CodebookViewer({ codebook, questions, rawdata, creating, onCreate, onGoAttach }) {
+  const [query, setQuery] = useState('')
+  const [onlyOther, setOnlyOther] = useState(false) // กรองเฉพาะข้อที่มี "อื่นๆ ระบุ"
+  const cbByLabel = codebook?.byVar ?? {}
+
+  // ข้อไหนมี "อื่นๆ ระบุ" = มีคอลัมน์ text ถัดไป หรือ value label มีคำว่า อื่น/ระบุ/other
+  // (คำนวณครั้งเดียว ไม่ผูกกับ query เพื่อความเร็ว)
+  const otherMap = useMemo(() => {
+    const m = {}
+    for (const q of questions) {
+      const cb = cbByLabel[q.label]
+      m[q.id] = hasOtherOption(cb) // มีตัวเลือก "อื่นๆ ระบุ" จริง (รองรับทุกรูปแบบ)
+    }
+    return m
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [questions, rawdata, codebook])
+
+  const otherCount = useMemo(
+    () => questions.filter((q) => otherMap[q.id] && cbByLabel[q.label]?.values?.length).length,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [questions, otherMap, codebook],
+  )
+
+  // ข้อที่จะแสดงในเมนูซ้าย — ข้อที่มี "อื่นๆ" ขึ้นก่อน แล้วตามด้วยข้อที่มี code
+  const list = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    return questions
+      .map((question) => {
+        const cb = cbByLabel[question.label] ?? null
+        return { question, cb, hasCodes: !!cb?.values?.length, hasOther: !!otherMap[question.id] }
+      })
+      .filter(({ question, cb, hasOther }) => {
+        if (onlyOther && !hasOther) return false
+        return !q || question.label.toLowerCase().includes(q) || (cb?.label ?? '').toLowerCase().includes(q)
+      })
+      .sort((a, b) =>
+        (b.hasOther - a.hasOther) || (b.hasCodes - a.hasCodes) || a.question.label.localeCompare(b.question.label),
+      )
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [questions, query, onlyOther, otherMap, codebook])
+
+  const [selectedId, setSelectedId] = useState(null)
+  const selected = list.find((x) => x.question.id === selectedId) ?? list.find((x) => x.hasCodes) ?? list[0]
+
+  // ความถี่ของแต่ละค่า + ข้อ 'อื่นๆ ระบุ' (คอลัมน์ถัดไป) ของข้อที่เลือก
+  const freq = useMemo(
+    () => (selected && rawdata ? freqByValue(rawdata, selected.question) : new Map()),
+    [selected, rawdata],
+  )
+  const otherQ = useMemo(
+    () => (selected && rawdata ? findOtherColumn(rawdata, selected.question, codebook) : null),
+    [selected, rawdata, codebook],
+  )
+  // ข้ออื่นที่ใช้โครง code เหมือนกันเป๊ะ (จะถูก auto รวมเข้าโครงเดียวกันตอนสร้าง)
+  const sameGroup = useMemo(
+    () => (selected?.hasCodes && rawdata ? findSameFrameQuestions(codebook, rawdata.questions, selected.question) : []),
+    [selected, rawdata, codebook],
+  )
+
+  if (!codebook) {
+    return (
+      <EmptyState
+        icon={Database}
+        title="ยังไม่ได้แนบ Codebook (.sav)"
+        subtitle="แนบไฟล์ SPSS .sav ที่หน้าโปรเจกต์ (กล่องศูนย์กลางข้อมูล) เพื่อดึง Value+Label มาดูโจทย์และสร้าง Code"
+        action={<Button onClick={onGoAttach}><Database size={16} /> ไปแนบ .sav</Button>}
+      />
+    )
+  }
+
+  return (
+    <div className="flex h-[calc(100vh-14rem)] min-h-[24rem] gap-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      {/* เมนูซ้าย: รายการข้อ */}
+      <div className="flex w-72 shrink-0 flex-col border-r border-slate-100 pr-3">
+        <div className="relative mb-2">
+          <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="ค้นหาข้อ / โจทย์…"
+            className="w-full rounded-lg border border-slate-300 bg-white py-1.5 pl-8 pr-2 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+          />
+        </div>
+        {/* ปุ่มกรองเฉพาะข้อที่มี "อื่นๆ ระบุ" (งาน CE) */}
+        <button
+          onClick={() => setOnlyOther((v) => !v)}
+          className={`mb-2 flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold transition-colors ${
+            onlyOther ? 'bg-amber-500 text-white' : 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+          }`}
+          title="ข้อที่มีช่อง 'อื่นๆ โปรดระบุ' ให้ลงโค้ด"
+        >
+          <CornerDownRight size={13} />
+          {onlyOther ? 'แสดงทุกข้อ' : `เฉพาะข้อที่มี "อื่นๆ ระบุ"`}
+          <span className={`ml-auto rounded px-1.5 py-0.5 text-[10px] font-bold ${onlyOther ? 'bg-white/25 text-white' : 'bg-amber-200 text-amber-800'}`}>
+            {otherCount}
+          </span>
+        </button>
+        <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto">
+          {list.length === 0 ? (
+            <p className="px-2 py-6 text-center text-xs text-slate-400">
+              {onlyOther ? 'ไม่มีข้อที่มี "อื่นๆ ระบุ"' : 'ไม่พบข้อที่ตรงกับคำค้น'}
+            </p>
+          ) : (
+            list.map(({ question, cb, hasCodes, hasOther }) => {
+              const active = selected?.question.id === question.id
+              return (
+                <button
+                  key={question.id}
+                  onClick={() => setSelectedId(question.id)}
+                  className={`flex w-full items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors ${
+                    active ? 'bg-indigo-600 text-white' : 'hover:bg-slate-50'
+                  }`}
+                  title={cb?.label || question.label}
+                >
+                  <span className="truncate font-medium">{question.label}</span>
+                  {hasOther && (
+                    <span className={`shrink-0 rounded px-1 py-0.5 text-[9px] font-bold ${active ? 'bg-white/25 text-white' : 'bg-amber-100 text-amber-700'}`}>
+                      อื่นๆ
+                    </span>
+                  )}
+                  {hasCodes ? (
+                    <span className={`ml-auto shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold ${active ? 'bg-white/25 text-white' : 'bg-emerald-100 text-emerald-600'}`}>
+                      {cb.values.length}
+                    </span>
+                  ) : (
+                    <span className={`ml-auto shrink-0 text-[10px] ${active ? 'text-indigo-200' : 'text-slate-300'}`}>—</span>
+                  )}
+                </button>
+              )
+            })
+          )}
+        </div>
+      </div>
+
+      {/* ขวา: โจทย์ + Code ของข้อที่เลือก */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        {!selected ? (
+          <p className="py-10 text-center text-sm text-slate-400">เลือกข้อจากเมนูด้านซ้าย</p>
+        ) : (
+          <>
+            <div className="mb-3 flex shrink-0 items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-xs font-semibold text-slate-400">ข้อ {selected.question.label} — โจทย์</p>
+                <h3 className="text-base font-bold text-slate-800">
+                  {selected.cb?.label || <span className="text-slate-400">— ไม่มี variable label ใน .sav —</span>}
+                </h3>
+                {sameGroup.length > 1 && (
+                  <p className="mt-1 flex items-center gap-1 text-[11px] font-medium text-indigo-600">
+                    <Layers size={12} /> ใช้โครงเดียวกับอีก {sameGroup.length - 1} ข้อ:{' '}
+                    <b className="truncate">{sameGroup.filter((q) => q.id !== selected.question.id).map((q) => q.label).join(', ')}</b>{' '}
+                    <span className="text-indigo-400">(auto รวมให้)</span>
+                  </p>
+                )}
+                {otherQ && (
+                  <p className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-sky-600">
+                    <CornerDownRight size={12} /> มีข้อ "อื่นๆ ระบุ": <b>{otherQ.label}</b> (สร้างก่อน แล้วกด "Group อัตโนมัติ" ให้ AI จับเข้ารหัส)
+                  </p>
+                )}
+              </div>
+              {selected.hasCodes && (
+                <Button size="sm" className="shrink-0" disabled={!!creating} onClick={() => onCreate(selected.question)}>
+                  {creating ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                  {creating ? 'กำลังสร้าง…' : 'สร้าง Codeframe จาก Code นี้'}
+                </Button>
+              )}
+            </div>
+
+            {creating && (
+              <p className="mb-2 shrink-0 rounded-lg bg-violet-50 px-3 py-1.5 text-xs font-medium text-violet-600">
+                {creating}
+              </p>
+            )}
+
+            {selected.hasCodes ? (
+              <div className="min-h-0 flex-1 overflow-y-auto rounded-xl border border-slate-200">
+                <table className="w-full text-left text-sm">
+                  <thead className="sticky top-0 z-10">
+                    <tr className="border-b border-slate-200 bg-slate-100 text-xs font-bold text-slate-500">
+                      <th className="w-24 px-3 py-2">Value (Code)</th>
+                      <th className="px-3 py-2">Label</th>
+                      <th className="w-24 px-3 py-2 text-right">Frequency</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50">
+                    {selected.cb.values.map((v, i) => {
+                      const n = freq.get(String(v.value)) ?? 0
+                      return (
+                        <tr key={i} className={i % 2 ? 'bg-slate-50/40' : 'bg-white'}>
+                          <td className="px-3 py-1.5 font-mono font-semibold text-amber-700">{String(v.value)}</td>
+                          <td className="px-3 py-1.5 text-slate-700">{v.label}</td>
+                          <td className="px-3 py-1.5 text-right font-semibold text-slate-500">
+                            {n || <span className="text-slate-300">0</span>}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="rounded-xl border-2 border-dashed border-slate-200 p-8 text-center">
+                <ListTree size={26} className="mx-auto text-slate-300" />
+                <p className="mt-2 text-sm font-semibold text-slate-500">ข้อนี้ไม่มี Value Label ใน .sav</p>
+                <p className="mt-1 text-xs text-slate-400">
+                  (อาจเป็นข้อปลายเปิด/ข้อความ หรือชื่อข้อใน xlsx ไม่ตรงกับชื่อ variable ใน .sav)
+                </p>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ============================================================
+// เลือก "ชนิดข้อ" ที่กล่องนี้ดูแล — มีปุ่มเลือกอัตโนมัติ (OE=ข้อ text, CE=ที่เหลือ)
+// ============================================================
+function QuestionPicker({ open, onClose, box, rawdata, questions, value, onSave }) {
+  const [selected, setSelected] = useState(value)
+  useEffect(() => { if (open) setSelected(value) }, [open, value])
+
+  const toggle = (qid) => setSelected((s) => (s.includes(qid) ? s.filter((x) => x !== qid) : [...s, qid]))
+
+  const autoSelect = () => {
+    const textIds = new Set(detectTextQuestions(rawdata))
+    // OE = ข้อ text (ปลายเปิด), CE = ข้อที่เหลือ (ปลายปิด/ตัวเลือก)
+    const ids = questions
+      .filter((q) => (box === 'oe' ? textIds.has(q.id) : !textIds.has(q.id)))
+      .map((q) => q.id)
+    setSelected(ids)
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} title={`เลือกข้อของกล่อง ${BOX_META[box].label}`} wide>
+      <p className="mb-3 text-xs text-slate-500">
+        ติ๊กเลือกข้อ (คอลัมน์) ที่กล่องนี้จะนำมาทำ Codeframe — CE และ OE เลือกคนละชุดได้
+      </p>
+      <div className="mb-3 flex items-center gap-2">
+        <Button variant="soft" size="sm" onClick={autoSelect} disabled={!rawdata}>
+          <Wand2 size={14} /> เลือกอัตโนมัติ ({box === 'oe' ? 'ข้อปลายเปิด/text' : 'ข้อปลายปิด'})
+        </Button>
+        <button onClick={() => setSelected([])} className="cursor-pointer text-xs text-slate-400 hover:text-rose-500">
+          ล้างทั้งหมด
+        </button>
+        <span className="ml-auto text-xs font-semibold text-indigo-600">เลือกแล้ว {selected.length} ข้อ</span>
+      </div>
+      <div className="grid max-h-80 grid-cols-2 gap-2 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-3">
+        {questions.map((q) => {
+          const checked = selected.includes(q.id)
+          return (
+            <button
+              type="button"
+              key={q.id}
+              onClick={() => toggle(q.id)}
+              className={`flex cursor-pointer items-center justify-between gap-1 truncate rounded-lg border px-3 py-2 text-left text-xs font-medium transition-colors ${
+                checked
+                  ? 'border-indigo-500 bg-indigo-600 text-white shadow-sm'
+                  : 'border-slate-200 bg-white text-slate-600 hover:border-indigo-300'
+              }`}
+              title={q.label}
+            >
+              <span className="truncate">{q.label}</span>
+              {q.type === 'MA' && (
+                <span className={`shrink-0 rounded px-1 py-0.5 text-[9px] font-bold ${checked ? 'bg-white/25 text-white' : 'bg-violet-100 text-violet-600'}`}>
+                  MA
+                </span>
+              )}
+            </button>
+          )
+        })}
+      </div>
+      <div className="mt-4 flex justify-end gap-2">
+        <Button variant="secondary" onClick={onClose}>ยกเลิก</Button>
+        <Button onClick={() => { onSave(selected); onClose() }}>บันทึก ({selected.length} ข้อ)</Button>
+      </div>
+    </Modal>
+  )
+}
+
+// ============================================================
+// Wizard สร้าง Codeframe: เลือกข้อ (จากที่กล่องดูแล) → กำหนดชีท
+// ============================================================
+function CodeframeWizard({ open, onClose, questions, allQuestions, onCreate }) {
+  const [step, setStep] = useState(1)
+  const [name, setName] = useState('')
+  const [selected, setSelected] = useState([])
+  const [sheetCount, setSheetCount] = useState(1)
+  const [sheetOf, setSheetOf] = useState({})
+
+  // ถ้ากล่องยังไม่เลือกข้อ ให้ fallback เป็นทุกข้อ
+  const pool = questions.length ? questions : allQuestions
+
+  const reset = () => {
+    setStep(1); setName(''); setSelected([]); setSheetCount(1); setSheetOf({})
+  }
+  const close = () => { reset(); onClose() }
+  const toggle = (qid) => setSelected((s) => (s.includes(qid) ? s.filter((x) => x !== qid) : [...s, qid]))
+
+  const goStep2 = () => {
+    const init = {}
+    selected.forEach((qid) => { init[qid] = sheetOf[qid] ?? 0 })
+    setSheetOf(init)
+    setStep(2)
+  }
+
+  const create = () => {
+    const sheets = Array.from({ length: sheetCount }, (_, i) => ({
+      id: uid(),
+      name: i === 0 ? 'ชีทแรก (โครงแรก)' : `ชีท ${i + 1}`,
+      questionIds: selected.filter((qid) => Math.min(sheetOf[qid] ?? 0, sheetCount - 1) === i),
+      nets: [],
+      assignments: {},
+    }))
+    onCreate(sheets, name.trim() || 'Codeframe ใหม่')
+    reset()
+    onClose()
+  }
+
+  return (
+    <Modal
+      open={open}
+      onClose={close}
+      title={step === 1 ? 'สร้าง Codeframe — เลือกข้อ' : 'สร้าง Codeframe — กำหนดชีท'}
+      wide
+    >
+      <div className="mb-5 flex items-center gap-2 text-xs font-semibold">
+        <span className={`flex h-6 w-6 items-center justify-center rounded-full ${step >= 1 ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-500'}`}>1</span>
+        <span className={step >= 1 ? 'text-indigo-700' : 'text-slate-400'}>เลือกข้อ</span>
+        <span className="h-px w-8 bg-slate-200" />
+        <span className={`flex h-6 w-6 items-center justify-center rounded-full ${step >= 2 ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-500'}`}>2</span>
+        <span className={step >= 2 ? 'text-indigo-700' : 'text-slate-400'}>กำหนดชีท / โครง</span>
+      </div>
+
+      {step === 1 && (
+        <>
+          <Field label="ชื่อ Codeframe">
+            <TextInput autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="เช่น Codeframe Q2 เหตุผล" />
+          </Field>
+          <Field
+            label={`เลือกข้อที่จะใช้สร้าง Codeframe (เลือกแล้ว ${selected.length} ข้อ)`}
+            hint="แสดงเฉพาะข้อที่กล่องนี้ดูแล (ตั้งค่าได้ที่ปุ่ม 'เลือกข้อของกล่อง')"
+          >
+            <div className="grid max-h-72 grid-cols-2 gap-2 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-3">
+              {pool.map((q) => {
+                const checked = selected.includes(q.id)
+                return (
+                  <button
+                    type="button"
+                    key={q.id}
+                    onClick={() => toggle(q.id)}
+                    className={`flex cursor-pointer items-center justify-between gap-1 truncate rounded-lg border px-3 py-2 text-left text-xs font-medium transition-colors ${
+                      checked
+                        ? 'border-indigo-500 bg-indigo-600 text-white shadow-sm'
+                        : 'border-slate-200 bg-white text-slate-600 hover:border-indigo-300'
+                    }`}
+                    title={q.label}
+                  >
+                    <span className="truncate">{q.label}</span>
+                    {q.type === 'MA' && (
+                      <span className={`shrink-0 rounded px-1 py-0.5 text-[9px] font-bold ${checked ? 'bg-white/25 text-white' : 'bg-violet-100 text-violet-600'}`}>
+                        MA
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+          </Field>
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={close}>ยกเลิก</Button>
+            <Button onClick={goStep2} disabled={selected.length === 0}>
+              ถัดไป: กำหนดชีท <ChevronRight size={15} />
+            </Button>
+          </div>
+        </>
+      )}
+
+      {step === 2 && (
+        <>
+          <Field label="จำนวนชีท (โครง) ใน Codeframe นี้" hint="ถ้าหลายข้อใช้โครงเดียวกัน ให้รวมไว้ชีทเดียวกันได้">
+            <div className="flex items-center gap-3">
+              <input
+                type="number"
+                min={1}
+                max={Math.max(1, selected.length)}
+                value={sheetCount}
+                onChange={(e) => setSheetCount(Math.max(1, Math.min(selected.length, Number(e.target.value) || 1)))}
+                className="w-24 rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+              />
+              <span className="text-xs text-slate-400">สูงสุด {selected.length} ชีท (ตามจำนวนข้อที่เลือก)</span>
+            </div>
+          </Field>
+          <Field label="กำหนดว่าแต่ละข้ออยู่ชีทไหน" hint="ข้อที่อยู่ชีทเดียวกันจะใช้โครง Codeframe เดียวกัน">
+            <div className="max-h-72 space-y-2 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-3">
+              {selected.map((qid) => {
+                const q = pool.find((x) => x.id === qid)
+                return (
+                  <div key={qid} className="flex items-center justify-between gap-3 rounded-lg bg-white px-3 py-2 ring-1 ring-slate-200">
+                    <span className="truncate text-sm font-medium text-slate-700">{q?.label}</span>
+                    <select
+                      value={Math.min(sheetOf[qid] ?? 0, sheetCount - 1)}
+                      onChange={(e) => setSheetOf((s) => ({ ...s, [qid]: Number(e.target.value) }))}
+                      className="cursor-pointer rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 outline-none focus:border-indigo-500"
+                    >
+                      {Array.from({ length: sheetCount }, (_, i) => (
+                        <option key={i} value={i}>{i === 0 ? 'ชีทแรก (โครงแรก)' : `ชีท ${i + 1}`}</option>
+                      ))}
+                    </select>
+                  </div>
+                )
+              })}
+            </div>
+          </Field>
+          <div className="flex justify-between gap-2">
+            <Button variant="ghost" onClick={() => setStep(1)}>
+              <ArrowLeft size={15} /> ย้อนกลับ
+            </Button>
+            <Button onClick={create}>
+              <Plus size={15} /> สร้าง Codeframe ({sheetCount} ชีท / {selected.length} ข้อ)
+            </Button>
+          </div>
+        </>
+      )}
+    </Modal>
+  )
+}
