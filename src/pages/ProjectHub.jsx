@@ -518,8 +518,8 @@ export default function ProjectHub() {
             </p>
           </div>
         ) : (
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
-            <div className="rounded-2xl border border-emerald-200 bg-gradient-to-br from-emerald-50/60 to-white p-4 shadow-sm">
+          <div className="grid grid-cols-[minmax(0,1fr)_minmax(8.75rem,14rem)] gap-3 md:grid-cols-[minmax(0,1fr)_18rem] xl:grid-cols-[minmax(0,1fr)_22rem]">
+            <div className="min-w-0 rounded-2xl border border-emerald-200 bg-gradient-to-br from-emerald-50/60 to-white p-4 shadow-sm">
               <div className="flex items-start gap-3">
                 <div className="rounded-xl bg-emerald-100 p-2.5 text-emerald-600">
                   <CheckCircle2 size={20} />
@@ -602,7 +602,7 @@ export default function ProjectHub() {
 
 function StatusSummaryCard({ statusSummary }) {
   return (
-    <div className="rounded-2xl border border-cyan-100 bg-white p-3 shadow-sm ring-1 ring-cyan-50">
+    <div className="h-full min-w-0 rounded-2xl border border-cyan-100 bg-white p-3 shadow-sm ring-1 ring-cyan-50">
       <div className="mb-2 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-cyan-50 text-cyan-600">
