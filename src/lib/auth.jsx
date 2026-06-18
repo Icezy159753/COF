@@ -50,7 +50,12 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     let unsubProfile = null
+    const authFallback = setTimeout(() => {
+      // กัน Firebase Auth initial state ไม่ callback แล้วค้างที่หน้า "กำลังเข้าสู่ระบบ"
+      setLoading(false)
+    }, 8000)
     const unsub = onAuthStateChanged(auth, async (u) => {
+      clearTimeout(authFallback)
       if (unsubProfile) {
         unsubProfile()
         unsubProfile = null
@@ -62,23 +67,31 @@ export function AuthProvider({ children }) {
         return
       }
       setLoading(true)
-      try {
-        await ensureProfile(u)
-      } catch (e) {
-        console.error('ensureProfile failed', e)
-      }
-      // ติดตามโปรไฟล์แบบเรียลไทม์ (สถานะ/role เปลี่ยน → อัปเดตทันทีโดยไม่ต้องรีโหลด)
+      const profileRef = doc(db, 'users', u.uid)
+      const fallback = setTimeout(() => {
+        // กันหน้า Splash ค้างถ้า Firestore/profile listener ช้าในมือถือ
+        setLoading(false)
+      }, 8000)
+
+      // ติดตามโปรไฟล์แบบเรียลไทม์ทันที — ไม่รอ ensureProfile เพื่อกัน boot ค้าง
       unsubProfile = onSnapshot(
-        doc(db, 'users', u.uid),
+        profileRef,
         (s) => {
+          clearTimeout(fallback)
           setProfile(s.exists() ? s.data() : null)
           setLoading(false)
         },
         (err) => {
+          clearTimeout(fallback)
           console.error('profile snapshot error', err)
           setLoading(false)
         },
       )
+
+      ensureProfile(u).catch((e) => {
+        console.error('ensureProfile failed', e)
+        setLoading(false)
+      })
     })
     return () => {
       unsub()
