@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   FolderKanban, Plus, Trash2, ChevronRight, FileSpreadsheet, Layers,
-  SlidersHorizontal, Search, X,
+  SlidersHorizontal, Search, X, ShieldCheck, Activity, Bot,
 } from 'lucide-react'
 import { useStore } from '../store.jsx'
 import { newRowCount } from '../lib/boxes.js'
@@ -18,6 +18,19 @@ export default function Dashboard() {
   const [name, setName] = useState('')
   const [client, setClient] = useState('')
   const [programmer, setProgrammer] = useState('')
+
+  const projectStats = useMemo(() => {
+    const rows = state.projects.reduce((sum, p) => sum + (p.rawMeta?.rowCount || 0), 0)
+    const pending = state.projects.reduce((sum, p) => {
+      if (!p.rawMeta) return sum
+      return sum + Math.max(
+        newRowCount(p, 'ce'),
+        newRowCount(p, 'oe'),
+        newRowCount(p, 'verbatim'),
+      )
+    }, 0)
+    return { rows, pending, codeframes: state.codeframes.length }
+  }, [state.projects, state.codeframes])
 
   const submit = (e) => {
     e.preventDefault()
@@ -58,6 +71,17 @@ export default function Dashboard() {
               </span>
             )}
           </button>
+          <Link
+            to="/ops"
+            className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-white/40 bg-white/10 px-4 py-2.5 text-sm font-semibold text-white backdrop-blur transition-colors hover:bg-white/20"
+          >
+            <ShieldCheck size={16} /> Ops Center
+          </Link>
+        </div>
+        <div className="mt-6 grid gap-2 sm:grid-cols-3">
+          <HeroStat icon={Activity} label="Raw rows" value={projectStats.rows.toLocaleString('th-TH')} />
+          <HeroStat icon={Layers} label="Codeframes" value={projectStats.codeframes.toLocaleString('th-TH')} />
+          <HeroStat icon={Bot} label="Pending rows" value={projectStats.pending.toLocaleString('th-TH')} />
         </div>
       </div>
 
@@ -175,7 +199,19 @@ export default function Dashboard() {
   )
 }
 
-// ====== Popup: ตัวแปรที่ "ไม่ทำ Code" (global ทุกโปรเจกต์ · บันทึกลง Firestore) ======
+function HeroStat({ icon: Icon, label, value }) {
+  return (
+    <div className="rounded-2xl border border-white/20 bg-white/10 px-4 py-3 backdrop-blur">
+      <div className="flex items-center gap-2 text-indigo-100">
+        <Icon size={16} />
+        <span className="text-xs font-semibold uppercase tracking-wide">{label}</span>
+      </div>
+      <p className="mt-1 text-xl font-bold text-white">{value}</p>
+    </div>
+  )
+}
+
+// ====== Popup: ตัวแปรที่ \"ไม่ทำ Code\" (global ทุกโปรเจกต์ · บันทึกลง Firestore) ======
 function ExcludedVarsModal({ open, onClose }) {
   const { state, setExcludedVars } = useStore()
   const excluded = state.settings?.excludedVars ?? []

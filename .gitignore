@@ -7,16 +7,25 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Dependencies / build
 node_modules
 dist
 dist-ssr
+.firebase/
 *.local
+
+# Local env / secrets
+.env
+.env.*
+!.env.example
+openrouter.txt
 
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
 .idea
 .DS_Store
+Thumbs.db
 *.suo
 *.ntvs*
 *.njsproj
@@ -24,11 +33,6 @@ dist-ssr
 *.sw?
 
 # ---- Codeframe Studio: ไม่เอาขึ้น repo ----
-# ความลับ — API key (ห้ามขึ้น GitHub)
-openrouter.txt
-.env
-.env.*
-
 # ข้อมูลลูกค้า/ทดสอบ (เป็นความลับ ไม่เผยแพร่)
 data test/
 *.sav

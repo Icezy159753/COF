@@ -1,0 +1,49 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function role() {
+      return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
+        : null;
+    }
+
+    function status() {
+      return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status
+        : null;
+    }
+
+    function approved() {
+      return signedIn() && status() == 'approved';
+    }
+
+    function admin() {
+      return approved() && (role() == 'admin' || role() == 'superadmin');
+    }
+
+    match /users/{uid} {
+      allow read: if isSelf(uid) || admin();
+      allow create: if isSelf(uid);
+      allow update: if isSelf(uid) || admin();
+      allow delete: if admin();
+    }
+
+    match /settings/{docId} {
+      allow read: if approved();
+      allow write: if admin();
+    }
+
+    match /{collection}/{docId} {
+      allow read, write: if approved()
+        && collection in ['projects', 'codeframes', 'rawdata_chunks', 'codebook_chunks', 'audit_logs', 'versions'];
+    }
+  }
+}

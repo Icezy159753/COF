@@ -27,6 +27,7 @@ export default function BoxPage() {
   const [deleting, setDeleting] = useState(null)
   const [view, setView] = useState('codeframes') // 'codeframes' | 'codebook'
   const [creating, setCreating] = useState(null) // ข้อความสถานะระหว่างสร้าง codeframe (AI)
+  const [smartSetupOpen, setSmartSetupOpen] = useState(false)
   const [toast, setToast] = useState(null)
 
   // เปิดกล่องครั้งแรก → ทำเครื่องหมายว่าดูแถวล่าสุดแล้ว (ล้าง badge แถวใหม่)
@@ -295,23 +296,100 @@ export default function BoxPage() {
 
           {/* Auto: สร้าง Codeframe เดียวจากทุกข้อที่มี 'อื่นๆ ระบุ' แยกชีทตามกลุ่มโครง */}
           {codebook && autoGroups.length > 0 && (
-            <div className="mb-5 flex flex-wrap items-center gap-3 rounded-2xl border border-amber-200 bg-gradient-to-br from-amber-50/70 to-white p-4 shadow-sm">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-100 text-amber-600">
-                <Sparkles size={20} />
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={() => setSmartSetupOpen((v) => !v)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  setSmartSetupOpen((v) => !v)
+                }
+              }}
+              className="group mb-5 cursor-pointer overflow-hidden rounded-[1.7rem] border border-indigo-100 bg-white shadow-[0_18px_55px_rgba(79,70,229,0.10)] ring-1 ring-white transition-all duration-300 hover:-translate-y-0.5 hover:border-indigo-200 hover:shadow-[0_26px_75px_rgba(79,70,229,0.18)] focus:outline-none focus:ring-2 focus:ring-indigo-300"
+            >
+              <div className="relative flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between">
+                <span className="pointer-events-none absolute inset-y-0 left-0 w-1.5 bg-gradient-to-b from-indigo-500 via-violet-500 to-sky-400 transition-all duration-300 group-hover:w-2.5" />
+                <span className="pointer-events-none absolute -right-10 -top-14 h-32 w-32 rounded-full bg-indigo-100/70 blur-2xl transition-transform duration-500 group-hover:scale-125" />
+                <span className="pointer-events-none absolute right-20 bottom-0 h-20 w-20 rounded-full bg-sky-100/60 blur-2xl transition-transform duration-500 group-hover:translate-x-4" />
+                <span className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-indigo-200 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
+
+                <div className="relative flex min-w-0 items-start gap-3 pl-1.5">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-slate-950 text-white shadow-lg shadow-indigo-100 transition-transform duration-300 group-hover:scale-105 group-hover:rotate-3">
+                    <Sparkles size={20} />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-[11px] font-black uppercase tracking-[0.18em] text-indigo-400">Smart setup</p>
+                      <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-black text-emerald-600 ring-1 ring-emerald-100">
+                        พร้อมสร้าง
+                      </span>
+                      <span className="inline-flex items-center gap-1 rounded-full bg-white px-2 py-0.5 text-[11px] font-black text-slate-400 ring-1 ring-slate-200 transition-colors group-hover:text-indigo-600 group-hover:ring-indigo-200">
+                        คลิกดูรายละเอียด
+                        <ChevronRight size={12} className={`transition-transform ${smartSetupOpen ? 'rotate-90' : ''}`} />
+                      </span>
+                    </div>
+                    <h3 className="mt-1 text-base font-black text-slate-950 transition-colors group-hover:text-indigo-950">
+                      เจอชุดคำถาม “อื่นๆ ระบุ” ที่สร้าง Codeframe ได้ทันที
+                    </h3>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <span className="rounded-full bg-indigo-50 px-3 py-1 text-xs font-black text-indigo-700 ring-1 ring-indigo-100 transition-transform group-hover:-translate-y-0.5">
+                        {otherQuestionCount} ข้อ Other
+                      </span>
+                      <span className="rounded-full bg-violet-50 px-3 py-1 text-xs font-black text-violet-700 ring-1 ring-violet-100 transition-transform group-hover:-translate-y-0.5">
+                        {autoGroups.length} กลุ่มโครง
+                      </span>
+                      <span className="rounded-full bg-slate-50 px-3 py-1 text-xs font-bold text-slate-500 ring-1 ring-slate-200 transition-transform group-hover:-translate-y-0.5">
+                        แยกเป็น {autoGroups.length} ชีทอัตโนมัติ
+                      </span>
+                    </div>
+                    <p className="mt-2 max-w-2xl text-xs leading-relaxed text-slate-500">
+                      ระบบจะสร้าง Codeframe เดียว แยกข้อโครงเดียวกันไว้ชีทเดียวกัน และลงโค้ดปลายปิดให้ก่อน — จากนั้นค่อยเปิดแต่ละชีทเพื่อกด Group อัตโนมัติให้ AI จับ “อื่นๆ”
+                    </p>
+                  </div>
+                </div>
+
+                <Button
+                  className="relative shrink-0 rounded-2xl px-4 py-2.5 shadow-lg shadow-indigo-200/70 transition-transform hover:scale-[1.03]"
+                  disabled={!!creating}
+                  onClick={(e) => { e.stopPropagation(); autoBuildAll() }}
+                >
+                  {creating ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
+                  {creating ? 'กำลังสร้าง…' : `สร้าง ${autoGroups.length} ชีท`}
+                </Button>
               </div>
-              <div className="min-w-0">
-                <p className="text-sm font-bold text-slate-800">
-                  พบ {otherQuestionCount} ข้อที่มี "อื่นๆ ระบุ" · {autoGroups.length} กลุ่มโครง
-                </p>
-                <p className="text-xs text-slate-500">
-                  สร้าง Codeframe เดียว แยกเป็น {autoGroups.length} ชีท (ข้อที่ใช้โครงเดียวกันอยู่ชีทเดียวกัน) +
-                  ลงโค้ดปลายปิดอัตโนมัติ — เสร็จทันที แล้วค่อยกด "Group อัตโนมัติ" ให้ AI จับ "อื่นๆ" เองในแต่ละข้อ
-                </p>
-              </div>
-              <Button className="ml-auto shrink-0" disabled={!!creating} onClick={autoBuildAll}>
-                {creating ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
-                {creating ? 'กำลังสร้าง…' : `Auto สร้าง Codeframe (${autoGroups.length} ชีท)`}
-              </Button>
+
+              {smartSetupOpen && (
+                <div className="relative border-t border-indigo-50 bg-gradient-to-br from-indigo-50/55 via-white to-sky-50/45 px-5 py-4">
+                  <div className="grid gap-3 md:grid-cols-3">
+                    {[
+                      ['1', 'แยกกลุ่มโครง', `รวมข้อที่ใช้ชุด code เดียวกันเป็น ${autoGroups.length} ชีท`],
+                      ['2', 'ลง code ปลายปิด', 'เติมรหัสจาก Codebook ให้ก่อนแบบไม่ต้องรอ AI'],
+                      ['3', 'รอจัด Other', 'เปิดแต่ละชีทแล้วกด Group อัตโนมัติให้ AI จัดข้อความ'],
+                    ].map(([step, title, desc]) => (
+                      <div key={step} className="rounded-2xl border border-white/80 bg-white/80 p-3 shadow-sm">
+                        <div className="mb-2 flex items-center gap-2">
+                          <span className="flex h-6 w-6 items-center justify-center rounded-full bg-indigo-600 text-[11px] font-black text-white">{step}</span>
+                          <p className="text-xs font-black text-slate-800">{title}</p>
+                        </div>
+                        <p className="text-[11px] leading-relaxed text-slate-500">{desc}</p>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    {autoGroups.slice(0, 8).map((g, i) => (
+                      <span key={`${g.questions[0]?.id ?? i}-preview`} className="rounded-lg bg-white px-2 py-1 text-[11px] font-bold text-slate-500 ring-1 ring-indigo-100">
+                        {shortSheetName(g.cb?.code || g.questions[0]?.label || `ชีท ${i + 1}`)} · {g.questions.length} ข้อ
+                      </span>
+                    ))}
+                    {autoGroups.length > 8 && (
+                      <span className="rounded-lg bg-white px-2 py-1 text-[11px] font-bold text-indigo-500 ring-1 ring-indigo-100">
+                        +{autoGroups.length - 8} ชีท
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           )}
           {creating && (
@@ -465,21 +543,19 @@ function CodebookViewer({ codebook, questions, rawdata, creating, onCreate, onGo
     [questions, otherMap, codebook],
   )
 
-  // ข้อที่จะแสดงในเมนูซ้าย — ข้อที่มี "อื่นๆ" ขึ้นก่อน แล้วตามด้วยข้อที่มี code
+  // ข้อที่จะแสดงในเมนูซ้าย — คงลำดับตามไฟล์ SPSS/Rawdata จริง ห้าม sort แบบตัวอักษร
   const list = useMemo(() => {
     const q = query.trim().toLowerCase()
     return questions
-      .map((question) => {
+      .map((question, order) => {
         const cb = cbByLabel[question.label] ?? null
-        return { question, cb, hasCodes: !!cb?.values?.length, hasOther: !!otherMap[question.id] }
+        return { question, cb, order, hasCodes: !!cb?.values?.length, hasOther: !!otherMap[question.id] }
       })
       .filter(({ question, cb, hasOther }) => {
         if (onlyOther && !hasOther) return false
         return !q || question.label.toLowerCase().includes(q) || (cb?.label ?? '').toLowerCase().includes(q)
       })
-      .sort((a, b) =>
-        (b.hasOther - a.hasOther) || (b.hasCodes - a.hasCodes) || a.question.label.localeCompare(b.question.label),
-      )
+      .sort((a, b) => a.order - b.order)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [questions, query, onlyOther, otherMap, codebook])
 

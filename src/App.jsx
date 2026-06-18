@@ -1,10 +1,11 @@
 import { useState, useRef, useEffect } from 'react'
 import { Routes, Route, Link, useLocation } from 'react-router-dom'
-import { LayoutGrid, LogOut, Users, Cpu } from 'lucide-react'
+import { LayoutGrid, LogOut, Users, Cpu, ShieldCheck } from 'lucide-react'
 import { useAuth } from './lib/auth.jsx'
 import Dashboard from './pages/Dashboard.jsx'
 import Members from './pages/Members.jsx'
 import AiProviders from './pages/AiProviders.jsx'
+import OpsCenter from './pages/OpsCenter.jsx'
 import ProjectHub from './pages/ProjectHub.jsx'
 import BoxPage from './pages/BoxPage.jsx'
 import CodeframeEditor from './pages/CodeframeEditor.jsx'
@@ -14,7 +15,7 @@ import VerbatimEditor from './pages/VerbatimEditor.jsx'
 const ROLE_LABEL = { superadmin: 'SuperAdmin', admin: 'Admin', member: 'Member' }
 
 function UserMenu() {
-  const { user, role, canManage, isSuperAdmin, signOutUser } = useAuth()
+  const { user, role, canManage, signOutUser } = useAuth()
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
 
@@ -77,7 +78,16 @@ function UserMenu() {
               <Users size={15} /> จัดการสมาชิก
             </Link>
           ) : null}
-          {isSuperAdmin ? (
+          {canManage ? (
+            <Link
+              to="/ops"
+              onClick={() => setOpen(false)}
+              className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm text-slate-700 transition hover:bg-slate-50"
+            >
+              <ShieldCheck size={15} /> Ops Center
+            </Link>
+          ) : null}
+          {canManage ? (
             <Link
               to="/ai-providers"
               onClick={() => setOpen(false)}
@@ -128,6 +138,7 @@ export default function App() {
       <main className="flex-1">
         <Routes>
           <Route path="/" element={<Dashboard />} />
+          <Route path="/ops" element={<OpsCenter />} />
           <Route path="/members" element={<Members />} />
           <Route path="/ai-providers" element={<AiProviders />} />
           <Route path="/projects/:projectId" element={<ProjectHub />} />

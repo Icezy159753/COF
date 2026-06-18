@@ -204,4 +204,7 @@ function aiGroupPlugin() {
 
 export default defineConfig({
   plugins: [react(), tailwindcss(), aiGroupPlugin()],
+  server: {
+    allowedHosts: true,
+  },
 })

@@ -11,7 +11,7 @@ export const DEFAULT_AI_CONFIG = {
 
 // ดึงรายชื่อโมเดลทั้งหมดที่ OpenRouter รองรับ (ผ่าน proxy ของ server)
 export async function fetchOpenRouterModels() {
-  const res = await fetch('/api/openrouter-models')
+  const res = await fetch(apiUrl('/api/openrouter-models'))
   if (!res.ok) {
     let msg = `เซิร์ฟเวอร์ตอบกลับ HTTP ${res.status}`
     try {
@@ -40,6 +40,11 @@ export function toAiPayload(cfg) {
 let activeAiPayload = toAiPayload(DEFAULT_AI_CONFIG)
 export function setActiveAiPayload(payload) {
   activeAiPayload = payload || toAiPayload(DEFAULT_AI_CONFIG)
+}
+
+const AI_API_BASE = (import.meta.env.VITE_AI_API_BASE || '').replace(/\/$/, '')
+function apiUrl(path) {
+  return `${AI_API_BASE}${path}`
 }
 
 // เรียก backend (/api/ai-group) ที่สั่ง AI ช่วยจัดกลุ่มรหัสคำตอบเป็น Net
@@ -81,7 +86,7 @@ export async function aiGroupCE(codes, verbatims) {
 
 // ทดสอบการเชื่อมต่อ provider/model ที่ระบุ (เรียกโมเดลจริง 1 ครั้งด้วย dummy เล็ก ๆ)
 export async function aiTestConnection(aiPayload) {
-  const res = await fetch('/api/ai-group', {
+  const res = await fetch(apiUrl('/api/ai-group'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ codes: [{ text: 'ทดสอบการเชื่อมต่อ', count: 1 }], ai: aiPayload }),
@@ -99,7 +104,7 @@ export async function aiTestConnection(aiPayload) {
 }
 
 async function postJson(url, body) {
-  const res = await fetch(url, {
+  const res = await fetch(apiUrl(url), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ...body, ai: activeAiPayload }),

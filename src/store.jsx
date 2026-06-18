@@ -291,6 +291,7 @@ export function StoreProvider({ children }) {
         rawMeta: null,
         codebook: null, // metadata Value+Label จากไฟล์ SPSS .sav (เก็บครั้งเดียวตอนแนบ)
         boxes: defaultBoxes(),
+        notes: [],
         ...data,
       }
       setState((s) => ({ ...s, projects: [project, ...s.projects] }))
@@ -433,7 +434,7 @@ export function StoreProvider({ children }) {
       setDoc(doc(db, 'settings', 'global'), { excludedVars: clean }, { merge: true }).catch(reportPersistError)
     },
 
-    // ตั้งค่า AI Provider/Model (SuperAdmin) — เก็บใน settings/global.ai + sync ให้ทุก request
+    // ตั้งค่า AI Provider/Model (Admin/SuperAdmin) — เก็บใน settings/global.ai แล้วใช้ร่วมกันทั้งระบบ
     setAiConfig(partial) {
       setState((s) => {
         const ai = { ...DEFAULT_AI_CONFIG, ...s.settings.ai, ...partial }
@@ -457,9 +458,9 @@ export function StoreProvider({ children }) {
 
 // เติม boxes ให้ project ที่อาจยังไม่มี field นี้ (กันพังเวลาอ่าน)
 function withBoxes(p) {
-  if (p.boxes?.ce && p.boxes?.oe && p.boxes?.verbatim) return p
+  if (p.boxes?.ce && p.boxes?.oe && p.boxes?.verbatim) return { ...p, notes: p.notes ?? [] }
   const d = defaultBoxes()
-  return { ...p, boxes: { ...d, ...(p.boxes ?? {}) } }
+  return { ...p, boxes: { ...d, ...(p.boxes ?? {}) }, notes: p.notes ?? [] }
 }
 
 export function useStore() {

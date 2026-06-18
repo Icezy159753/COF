@@ -1033,6 +1033,12 @@ export default function CodeframeEditor() {
       .filter((q) => q && cbBy?.[q.label]?.values?.length)
       .map((q) => ({ code: cbBy[q.label]?.code || q.label, label: cbBy[q.label]?.label || '', column: q.label }))
   }
+  // จำนวนข้อที่โชว์บนแท็บชีท: นับเฉพาะข้อหลัก/ปลายปิด ไม่รวมคอลัมน์ Text "อื่นๆ ระบุ"
+  const getSheetQuestionCount = (sh) => {
+    if (project?.codebook?.byVar) return getSheetQuestions(sh).length
+    return sh.questionIds.length
+  }
+
   // แถวบนสุดของชีท Excel: รหัสข้อ (variable) + ข้อความโจทย์ (จาก codebook) — ใช้ข้อแรก
   const getSheetTitle = (sh) => {
     const qs = getSheetQuestions(sh)
@@ -1126,7 +1132,7 @@ export default function CodeframeEditor() {
                 </>
               )}
               <span className={s.id === sheet.id ? 'text-white/70' : 'text-slate-400'}>
-                {s.questionIds.length} ข้อ
+                {getSheetQuestionCount(s)} ข้อ
               </span>
               {cf.sheets.length > 1 && (
                 <X

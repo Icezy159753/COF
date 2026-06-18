@@ -54,7 +54,7 @@ function recommendFree(models) {
 
 export default function AiProviders() {
   const { state, setAiConfig } = useStore()
-  const { isSuperAdmin } = useAuth()
+  const { canManage } = useAuth()
   const [form, setForm] = useState({ ...DEFAULT_AI_CONFIG, ...(state.settings.ai || {}) })
   const [saved, setSaved] = useState(false)
   const [test, setTest] = useState(null) // null | 'loading' | {ok, msg}
@@ -82,10 +82,10 @@ export default function AiProviders() {
     }
   }
 
-  if (!isSuperAdmin) {
+  if (!canManage) {
     return (
       <div className="mx-auto max-w-md px-5 py-20 text-center text-slate-500">
-        หน้านี้สำหรับ SuperAdmin เท่านั้น
+        หน้านี้สำหรับ Admin หรือ SuperAdmin เท่านั้น
         <div className="mt-3">
           <Link to="/" className="text-indigo-600 underline">
             กลับหน้าหลัก
@@ -159,22 +159,23 @@ export default function AiProviders() {
         <Cpu size={24} className="text-indigo-600" /> ตั้งค่า AI Provider
       </h1>
       <p className="mt-1 text-sm text-slate-500">
-        เลือกผู้ให้บริการ AI และโมเดลที่ใช้กับทุกฟีเจอร์ (Group CE, จับรหัส, ตรวจสะกด ฯลฯ)
+        Admin/SuperAdmin ตั้งค่า Provider และโมเดลกลางให้ทั้งระบบ — ตั้ง Codex Subscription ครั้งเดียวแล้วทุก user ใช้ได้ร่วมกัน
       </p>
+
 
       {/* เลือก Provider */}
       <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
         <Provider
           id="claude"
           name="Claude (Subscription)"
-          desc="ใช้ Claude Code CLI ที่ล็อกอินด้วย subscription บนเครื่องนี้ — ไม่ต้องใช้ API key"
-          badge="ฟรีในแพ็กเกจ"
+          desc="ใช้ Claude subscription/CLI ที่ Admin หรือ SuperAdmin ตั้งไว้บน runner กลาง แล้วทุก user ใช้งาน AI ผ่านค่านี้"
+          badge="Global"
         />
         <Provider
           id="codex"
           name="Codex CLI (OpenAI)"
-          desc="ใช้ Codex CLI ที่ล็อกอินด้วย ChatGPT subscription บนเครื่องนี้ — ไม่ต้องใช้ API key"
-          badge="ฟรีในแพ็กเกจ"
+          desc="ใช้ Codex CLI / ChatGPT subscription ที่ Admin หรือ SuperAdmin login ไว้บน runner กลาง แล้วทุก user ใช้งานร่วมกัน"
+          badge="Global"
         />
         <Provider
           id="openrouter"
@@ -200,7 +201,7 @@ export default function AiProviders() {
               ))}
             </select>
             <p className="mt-2 text-[12px] text-slate-400">
-              ใช้สิทธิ์ subscription บนเครื่อง ไม่มีค่าใช้จ่ายต่อครั้ง
+              ใช้สิทธิ์ subscription/CLI กลางที่ Admin ตั้งไว้ ค่า model นี้จะมีผลกับงาน AI ของทุก user
             </p>
           </div>
         ) : form.provider === 'codex' ? (
@@ -219,7 +220,7 @@ export default function AiProviders() {
               ))}
             </datalist>
             <p className="mt-2 text-[12px] text-slate-400">
-              ใช้สิทธิ์ ChatGPT subscription ที่ <span className="font-mono">codex login</span> ไว้บนเครื่อง — ไม่มีค่าใช้จ่ายต่อครั้ง
+              ใช้สิทธิ์ ChatGPT/Codex subscription ที่ Admin หรือ SuperAdmin login ไว้บน runner กลาง — ตั้งครั้งเดียวแล้วทุก user ใช้ร่วมกัน
             </p>
           </div>
         ) : (
@@ -237,7 +238,7 @@ export default function AiProviders() {
                 className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 font-mono text-sm outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
               />
               <p className="mt-1.5 text-[12px] text-slate-400">
-                สร้างได้ที่{' '}
+                สร้าง API Key กลางได้ที่{' '}
                 <a
                   href="https://openrouter.ai/keys"
                   target="_blank"
@@ -246,6 +247,7 @@ export default function AiProviders() {
                 >
                   openrouter.ai/keys
                 </a>
+                {' '}แล้วนำ key กลางมาวางในช่องนี้ (ใช้ร่วมกันทั้งระบบ)
               </p>
             </div>
 
@@ -371,7 +373,7 @@ export default function AiProviders() {
       </div>
 
       <p className="mt-5 text-[12px] text-slate-400">
-        การตั้งค่านี้ใช้ร่วมกันทั้งระบบ (ทุกผู้ใช้) — เปลี่ยน Provider/โมเดลแล้วมีผลกับงาน AI ครั้งถัดไปทันที
+        การตั้งค่านี้ใช้ร่วมกันทั้งระบบ (ทุก user) — เฉพาะ Admin/SuperAdmin แก้ไขได้
       </p>
     </div>
   )

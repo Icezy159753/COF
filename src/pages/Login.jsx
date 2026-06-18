@@ -1,4 +1,4 @@
-import { LayoutGrid } from 'lucide-react'
+import { LayoutGrid, LockKeyhole } from 'lucide-react'
 import { useAuth } from '../lib/auth.jsx'
 
 function GoogleMark() {
@@ -28,37 +28,69 @@ export default function Login() {
   const { signInWithGoogle, error } = useAuth()
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-slate-50 via-indigo-50 to-violet-100 px-5">
-      <div className="w-full max-w-sm rounded-3xl border border-white/60 bg-white/80 p-8 shadow-xl shadow-indigo-200/50 backdrop-blur">
-        <div className="flex flex-col items-center text-center">
-          <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-lg shadow-indigo-300">
-            <LayoutGrid size={28} />
-          </span>
-          <h1 className="mt-4 text-xl font-bold tracking-tight text-slate-900">
-            Codeframe <span className="text-indigo-600">Studio</span>
-          </h1>
-          <p className="mt-1 text-[13px] text-slate-500">
-            ระบบสร้าง Codeframe สำหรับงาน CE / OE / Verbatim
-          </p>
-        </div>
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[radial-gradient(circle_at_top_left,#eef2ff_0,#f8fafc_36%,#f8fafc_100%)] px-5 py-10">
+      <span className="pointer-events-none absolute -left-24 top-10 h-72 w-72 rounded-full bg-indigo-200/45 blur-3xl" />
+      <span className="pointer-events-none absolute bottom-0 right-0 h-96 w-96 rounded-full bg-violet-200/45 blur-3xl" />
+      <span className="pointer-events-none absolute left-1/2 top-1/2 h-80 w-80 -translate-x-1/2 -translate-y-1/2 rounded-full bg-sky-100/70 blur-3xl" />
 
-        <button
-          onClick={signInWithGoogle}
-          className="mt-8 flex w-full items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 active:scale-[0.99]"
-        >
-          <GoogleMark />
-          เข้าสู่ระบบด้วย Google
-        </button>
+      <div className="relative grid w-full max-w-4xl overflow-hidden rounded-[2.25rem] border border-white/70 bg-white shadow-[0_28px_90px_rgba(79,70,229,0.20)] ring-1 ring-indigo-50 md:grid-cols-[0.95fr_1.05fr]">
+        <section className="relative overflow-hidden bg-gradient-to-br from-indigo-600 via-violet-600 to-fuchsia-500 p-8 text-white md:p-10">
+          <span className="pointer-events-none absolute -left-16 -top-16 h-48 w-48 rounded-full bg-white/15 blur-2xl" />
+          <span className="pointer-events-none absolute bottom-6 right-6 h-40 w-40 rounded-full bg-sky-300/25 blur-2xl" />
+          <span className="pointer-events-none absolute inset-x-8 bottom-0 h-px bg-gradient-to-r from-transparent via-white/50 to-transparent" />
 
-        {error ? (
-          <p className="mt-4 rounded-lg bg-rose-50 px-3 py-2 text-center text-[12px] text-rose-600">
-            {error}
-          </p>
-        ) : null}
+          <div className="relative flex h-full min-h-[360px] items-center justify-center">
+            <div className="flex flex-col items-center text-center">
+              <span className="flex h-20 w-20 items-center justify-center rounded-[1.7rem] bg-white/18 shadow-2xl shadow-indigo-950/15 ring-1 ring-white/25 backdrop-blur">
+                <LayoutGrid size={40} />
+              </span>
+              <p className="mt-6 text-[11px] font-black uppercase tracking-[0.24em] text-white/65">DP Data Tools</p>
+              <h1 className="mt-2 text-3xl font-black tracking-tight md:text-4xl">Codeframe Studio</h1>
+            </div>
+          </div>
+        </section>
 
-        <p className="mt-6 text-center text-[11px] text-slate-400">
-          เข้าสู่ระบบเพื่อจัดการโปรเจกต์และข้อมูลของคุณ
-        </p>
+        <section className="relative flex items-center bg-white p-7 md:p-10">
+          <div className="w-full">
+            <div className="mb-8">
+              <span className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600 ring-1 ring-indigo-100">
+                <LockKeyhole size={23} />
+              </span>
+              <p className="text-[11px] font-black uppercase tracking-[0.2em] text-indigo-400">Welcome back</p>
+              <h2 className="mt-2 text-2xl font-black tracking-tight text-slate-950">เข้าสู่ระบบเพื่อเริ่มงาน</h2>
+              <p className="mt-2 text-sm leading-6 text-slate-500">
+                ใช้บัญชี Google เพื่อเปิดโปรเจกต์และข้อมูล Codeframe อย่างปลอดภัย
+              </p>
+            </div>
+
+            <button
+              onClick={signInWithGoogle}
+              className="group flex w-full items-center justify-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3.5 text-sm font-black text-slate-700 shadow-sm transition-all hover:-translate-y-0.5 hover:border-indigo-200 hover:bg-indigo-50/40 hover:shadow-xl hover:shadow-indigo-100 active:scale-[0.99]"
+            >
+              <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-white shadow-sm ring-1 ring-slate-100 transition-transform group-hover:scale-105">
+                <GoogleMark />
+              </span>
+              เข้าสู่ระบบด้วย Google
+            </button>
+
+            {error ? (
+              <p className="mt-4 rounded-2xl border border-rose-100 bg-rose-50 px-4 py-3 text-center text-[12px] font-semibold text-rose-600">
+                {error}
+              </p>
+            ) : null}
+
+            <div className="mt-6 rounded-2xl bg-slate-50 px-4 py-3 ring-1 ring-slate-100">
+              <p className="flex items-start gap-2 text-xs leading-5 text-slate-500">
+                <LockKeyhole size={14} className="mt-0.5 shrink-0 text-indigo-400" />
+                ระบบใช้ Google Authentication เท่านั้น — ไม่มีการเก็บรหัสผ่านไว้ในเว็บนี้
+              </p>
+            </div>
+
+            <p className="mt-7 text-center text-[11px] font-medium text-slate-400">
+              © 2026 Codeframe Studio · DP Data Tools
+            </p>
+          </div>
+        </section>
       </div>
     </div>
   )
