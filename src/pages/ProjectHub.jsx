@@ -94,8 +94,14 @@ function keyAuditMessage(audit) {
   )
 }
 
+const STATUS_VALUE_KEYWORDS = [
+  'approved', 'requiresapproval', 'requireapproval', 'pending', 'rejected', 'reject',
+  'complete', 'completed', 'incomplete', 'screenout', 'terminate', 'terminated', 'quota',
+]
+
 function findStatusColumn(rawdata) {
   const headers = rawdata?.headers ?? []
+  const rows = rawdata?.rows ?? []
   const norm = (v) => normalizeHeader(String(v ?? '').replace(/^\ufeff/, ''))
   const candidates = headers.map((h, index) => ({ index, label: String(h ?? '').trim(), norm: norm(h) }))
   let found = candidates.find((c) => c.norm === 'status')
@@ -107,7 +113,32 @@ function findStatusColumn(rawdata) {
     const n = norm(x.label)
     return n === 'status' || n.endsWith('status') || n.includes('status')
   })
-  return q ? { index: q.index, label: q.label, norm: norm(q.label) } : null
+  if (q) return { index: q.index, label: q.label, norm: norm(q.label) }
+
+  // fallback ลึก: ถ้าหัวคอลัมน์ไม่ได้ชื่อ Status แต่ค่าข้างในเป็นสถานะ เช่น Approved / Requires Approval
+  const maxCols = Math.max(headers.length, ...rows.slice(0, 250).map((r) => r.length))
+  let best = null
+  for (let index = 0; index < maxCols; index += 1) {
+    let nonBlank = 0
+    let hits = 0
+    const distinct = new Set()
+    for (const row of rows.slice(0, 500)) {
+      const value = String(row[index] ?? '').trim()
+      if (!value) continue
+      nonBlank += 1
+      distinct.add(value.toLowerCase())
+      const n = norm(value)
+      if (STATUS_VALUE_KEYWORDS.some((kw) => n === kw || n.includes(kw))) hits += 1
+    }
+    if (!hits) continue
+    const ratio = nonBlank ? hits / nonBlank : 0
+    // สถานะควรมีค่าซ้ำไม่กี่แบบ และ match คำสถานะจำนวนมากพอ
+    const score = hits * ratio - distinct.size * 0.02
+    if (hits >= 2 && ratio >= 0.35 && distinct.size <= 20 && (!best || score > best.score)) {
+      best = { index, label: headers[index] || `คอลัมน์ ${index + 1}`, norm: 'statusvalues', inferred: true, score }
+    }
+  }
+  return best
 }
 
 function summarizeStatus(rawdata) {
