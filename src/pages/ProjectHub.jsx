@@ -8,6 +8,7 @@ import {
 import { Database, Lock } from 'lucide-react'
 import { uid, useStore } from '../store.jsx'
 import { parseRawdataFile } from '../lib/excel.js'
+import { uniqueAnswers } from '../lib/answers.js'
 import { parseSavCodebook, remapCodebookByPosition } from '../lib/spss.js'
 import { BOX_META, newRowCount } from '../lib/boxes.js'
 import { Button, Badge, NewRowsBadge, Toast } from '../components/ui.jsx'
@@ -56,17 +57,23 @@ export default function ProjectHub() {
 
   const raw = project.rawMeta
 
-  // อัปโหลด/เปลี่ยนไฟล์ (แทนที่ทั้งก้อน) — ถ้ามี codeframe เดิม จับคู่ข้อใหม่ด้วย "ชื่อข้อ"
+  // อัปโหลด/เปลี่ยนไฟล์ (แทนที่ทั้งก้อน) — latest data เป็น source of truth
+  // - จับคู่ข้อเดิมกับข้อใหม่ด้วย "ชื่อหัวคอลัมน์"
+  // - เก็บ Code/Codeframe เดิมไว้
+  // - เก็บ assignment เดิมเฉพาะ key ที่ยังอยู่ในไฟล์ใหม่ หรือเป็น key ของ code ปลายปิดเดิม
+  //   → ถ้า respondent ถูกแก้ข้อความ "อื่นๆ" ในไฟล์ใหม่ ข้อความใหม่จะกลับไปอยู่คิว "ยังไม่จัดกลุ่ม"
   const handleReplace = async (file) => {
     if (!file) return
     setError('')
     setBusy('upload')
     try {
       const rawdata = await parseRawdataFile(file)
+      let sync = null
       if (raw && codeframes.length) {
         const oldIdToLabel = new Map(raw.questions.map((q) => [q.id, q.label]))
         const labelToNewId = new Map(rawdata.questions.map((q) => [q.label, q.id]))
-        let dropped = 0
+        const cbBy = project.codebook?.byVar
+        sync = { dropped: 0, carried: 0, pending: 0, removed: 0 }
         codeframes.forEach((cf) => {
           updateCodeframe(cf.id, (c) => ({
             ...c,
@@ -74,21 +81,51 @@ export default function ProjectHub() {
               const mapped = s.questionIds
                 .map((qid) => labelToNewId.get(oldIdToLabel.get(qid)))
                 .filter(Boolean)
-              dropped += s.questionIds.length - mapped.length
-              return { ...s, questionIds: mapped }
+              sync.dropped += s.questionIds.length - mapped.length
+
+              const validAnswerKeys = new Set(uniqueAnswers(rawdata, mapped).map((a) => a.key))
+              const codeIds = new Set(s.nets.flatMap((n) => n.codes.map((code) => code.id)))
+              const codeNoKeys = new Set(
+                s.nets.flatMap((n) => n.codes.map((code) => String(code.codeNo ?? '').trim()).filter(Boolean)),
+              )
+              const assignments = {}
+              for (const [key, ids] of Object.entries(s.assignments ?? {})) {
+                const cleanIds = ids.filter((id) => codeIds.has(id))
+                if (!cleanIds.length) { sync.removed += 1; continue }
+                // codeNoKeys = mapping ปลายปิดจาก codebook เช่น 1,2,99 ต้องอยู่เสมอ
+                // validAnswerKeys = คำตอบ/verbatim ที่ยังมีอยู่จริงใน latest rawdata
+                if (codeNoKeys.has(String(key).trim()) || validAnswerKeys.has(key)) {
+                  assignments[key] = cleanIds
+                  sync.carried += 1
+                } else {
+                  sync.removed += 1
+                }
+              }
+
+              const openIds = mapped.filter((qid) => {
+                const q = rawdata.questions.find((x) => x.id === qid)
+                return q && !(cbBy?.[q.label]?.values?.length)
+              })
+              sync.pending += uniqueAnswers(rawdata, openIds)
+                .filter((a) => !(assignments[a.key] ?? []).length).length
+
+              return { ...s, questionIds: mapped, assignments }
             }),
           }))
         })
-        if (dropped > 0) {
-          setToast({
-            type: 'warning',
-            title: `ไฟล์ใหม่ไม่มีบางข้อที่ Codeframe เดิมใช้อยู่`,
-            message: `เอาออกจากชีทแล้ว ${dropped} รายการ — ตรวจ "ข้อในชีทนี้" ของแต่ละ Codeframe อีกครั้ง`,
-            duration: 7000,
-          })
-        }
       }
       await setRawdata(projectId, rawdata)
+      if (sync) {
+        setToast({
+          type: sync.dropped ? 'warning' : 'success',
+          title: `อัปเดต Rawdata ล่าสุดแล้ว (${rawdata.rows.length} แถว)`,
+          message:
+            `ใช้ไฟล์ใหม่แทนที่ทั้งก้อน · คง Code เดิม ${sync.carried} mapping · ` +
+            `รอลง Code ${sync.pending} คำตอบ · ล้าง mapping เก่าที่ไม่อยู่ในไฟล์ใหม่ ${sync.removed}` +
+            (sync.dropped ? ` · ไฟล์ใหม่ไม่มีบางข้อที่ Codeframe เดิมใช้ ${sync.dropped} รายการ` : ''),
+          duration: 9000,
+        })
+      }
     } catch (err) {
       setError(`อ่าน/อัปโหลดไฟล์ไม่สำเร็จ: ${err.message}`)
     } finally {
