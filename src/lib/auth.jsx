@@ -1,5 +1,13 @@
 import { createContext, useContext, useEffect, useState } from 'react'
-import { onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth'
+import {
+  browserLocalPersistence,
+  getRedirectResult,
+  onAuthStateChanged,
+  setPersistence,
+  signInWithPopup,
+  signInWithRedirect,
+  signOut,
+} from 'firebase/auth'
 import { doc, getDoc, setDoc, onSnapshot, serverTimestamp } from 'firebase/firestore'
 import { auth, googleProvider, db } from './firebase.js'
 
@@ -50,6 +58,15 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     let unsubProfile = null
+    let cancelled = false
+    setPersistence(auth, browserLocalPersistence)
+      .then(() => getRedirectResult(auth))
+      .catch((e) => {
+        if (cancelled) return
+        console.error('google redirect sign-in failed', e)
+        setError(e?.message || 'เข้าสู่ระบบ Google ไม่สำเร็จ')
+        setLoading(false)
+      })
     const authFallback = setTimeout(() => {
       // กัน Firebase Auth initial state ไม่ callback แล้วค้างที่หน้า "กำลังเข้าสู่ระบบ"
       setLoading(false)
@@ -94,6 +111,8 @@ export function AuthProvider({ children }) {
       })
     })
     return () => {
+      cancelled = true
+      clearTimeout(authFallback)
       unsub()
       if (unsubProfile) unsubProfile()
     }
@@ -102,9 +121,24 @@ export function AuthProvider({ children }) {
   async function signInWithGoogle() {
     setError('')
     try {
+      await setPersistence(auth, browserLocalPersistence)
+      const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '')
+      if (isMobile) {
+        await signInWithRedirect(auth, googleProvider)
+        return
+      }
       await signInWithPopup(auth, googleProvider)
     } catch (e) {
       if (e?.code === 'auth/popup-closed-by-user' || e?.code === 'auth/cancelled-popup-request') return
+      if (e?.code === 'auth/popup-blocked' || e?.code === 'auth/operation-not-supported-in-this-environment') {
+        try {
+          await signInWithRedirect(auth, googleProvider)
+          return
+        } catch (redirectErr) {
+          setError(redirectErr?.message || 'เข้าสู่ระบบ Google ไม่สำเร็จ')
+          return
+        }
+      }
       setError(e?.message || 'เข้าสู่ระบบไม่สำเร็จ')
     }
   }
