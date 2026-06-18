@@ -1,9 +1,9 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   ArrowLeft, Upload, CheckCircle2, Table2, RefreshCcw, Plus,
   Layers, ListTree, MessageSquareText, ChevronRight, FolderPlus,
-  Clock3, StickyNote, Pencil, Trash2, X, Save, PlusCircle,
+  Clock3, StickyNote, Pencil, Trash2, X, Save, PlusCircle, Activity,
 } from 'lucide-react'
 import { Database, Lock } from 'lucide-react'
 import { uid, useStore } from '../store.jsx'
@@ -94,11 +94,27 @@ function keyAuditMessage(audit) {
   )
 }
 
+function summarizeStatus(rawdata) {
+  const headers = rawdata?.headers ?? []
+  const statusIndex = headers.findIndex((h) => normalizeHeader(h) === 'status')
+  if (statusIndex < 0) return { found: false, label: '', total: rawdata?.rows?.length ?? 0, items: [] }
+  const counts = new Map()
+  for (const row of rawdata.rows ?? []) {
+    const text = String(row[statusIndex] ?? '').trim() || '(ว่าง)'
+    counts.set(text, (counts.get(text) ?? 0) + 1)
+  }
+  const items = [...counts.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'th'))
+  return { found: true, label: headers[statusIndex], total: rawdata.rows?.length ?? 0, items }
+}
+
 export default function ProjectHub() {
   const { projectId } = useParams()
   const navigate = useNavigate()
   const { state, setRawdata, appendRawdata, loadRawdata, updateCodeframe, setCodebook, updateProject } = useStore()
   const project = state.projects.find((p) => p.id === projectId)
+  const raw = project?.rawMeta
   const codeframes = state.codeframes.filter((c) => c.projectId === projectId)
 
   const fileRef = useRef(null)
@@ -111,7 +127,25 @@ export default function ProjectHub() {
   const [notesOpen, setNotesOpen] = useState(false)
   const [noteDraft, setNoteDraft] = useState('')
   const [editingNoteId, setEditingNoteId] = useState(null)
+  const [statusSummary, setStatusSummary] = useState({ loading: false, found: false, label: '', total: 0, items: [] })
   const wiggleTimer = useRef(null)
+
+  useEffect(() => {
+    let cancelled = false
+    if (!raw) {
+      setStatusSummary({ loading: false, found: false, label: '', total: 0, items: [] })
+      return () => { cancelled = true }
+    }
+    setStatusSummary((prev) => ({ ...prev, loading: true }))
+    loadRawdata(projectId)
+      .then((rd) => {
+        if (!cancelled) setStatusSummary({ ...summarizeStatus(rd), loading: false })
+      })
+      .catch(() => {
+        if (!cancelled) setStatusSummary({ loading: false, found: false, label: '', total: raw.rowCount ?? 0, items: [] })
+      })
+    return () => { cancelled = true }
+  }, [projectId, raw?.updatedAt]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // คลิกกล่อง "Coming Soon" → เล่น animation สั่น + เด้ง (ยังเข้าไม่ได้)
   const pokeComingSoon = (key, label) => {
@@ -128,8 +162,6 @@ export default function ProjectHub() {
       </div>
     )
   }
-
-  const raw = project.rawMeta
 
   // อัปโหลด/เปลี่ยนไฟล์ (แทนที่ทั้งก้อน) — latest data เป็น source of truth
   // - จับคู่ข้อเดิมกับข้อใหม่ด้วย "ชื่อหัวคอลัมน์"
@@ -322,17 +354,17 @@ export default function ProjectHub() {
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,#eef2ff_0,#f8fafc_36%,#f8fafc_100%)]">
-      <div className="mx-auto max-w-7xl px-5 py-7">
+      <div className="mx-auto max-w-7xl px-5 py-5">
         <Link
           to="/"
-          className="mb-4 inline-flex items-center gap-1.5 text-sm font-medium text-slate-500 hover:text-indigo-600"
+          className="mb-3 inline-flex items-center gap-1.5 text-sm font-medium text-slate-500 hover:text-indigo-600"
         >
           <ArrowLeft size={15} /> โปรเจกต์ทั้งหมด
         </Link>
 
-        <section className="mb-6 grid gap-4 lg:grid-cols-[1fr_360px]">
-          <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="mb-4 flex items-center justify-between gap-3">
+        <section className="mb-4 grid gap-4 lg:grid-cols-[1fr_360px]">
+          <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="mb-3 flex items-center justify-between gap-3">
               <div>
                 <h2 className="font-bold text-slate-900">Job health</h2>
                 <p className="text-xs text-slate-400">สถานะหลักของงานนี้ก่อนเริ่ม coding/review/export</p>
@@ -365,7 +397,7 @@ export default function ProjectHub() {
             <span className="pointer-events-none absolute -right-12 -top-16 h-36 w-36 rounded-full bg-indigo-100/70 blur-2xl transition-transform group-hover:scale-125" />
             <span className="pointer-events-none absolute -bottom-16 -left-16 h-36 w-36 rounded-full bg-sky-100/60 blur-2xl" />
 
-            <div className="relative flex h-full flex-col p-5">
+            <div className="relative flex h-full flex-col p-4">
               <div className="flex items-start justify-between gap-3">
                 <div className="flex min-w-0 items-start gap-3">
                   <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-indigo-600 text-white shadow-lg shadow-indigo-200 transition-transform group-hover:scale-105">
@@ -382,7 +414,7 @@ export default function ProjectHub() {
                 </span>
               </div>
 
-              <div className="mt-4 rounded-2xl border border-slate-100 bg-gradient-to-br from-white to-slate-50 p-3.5 shadow-inner shadow-slate-100/70 transition-colors group-hover:from-indigo-50/70 group-hover:to-white">
+              <div className="mt-3 rounded-2xl border border-slate-100 bg-gradient-to-br from-white to-slate-50 p-3 shadow-inner shadow-slate-100/70 transition-colors group-hover:from-indigo-50/70 group-hover:to-white">
                 {latestNote ? (
                   <div className="flex gap-3">
                     <span className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-400 ring-4 ring-emerald-100" />
@@ -409,7 +441,7 @@ export default function ProjectHub() {
                 )}
               </div>
 
-              <div className="relative mt-4 flex items-center justify-between gap-3">
+              <div className="relative mt-3 flex items-center justify-between gap-3">
                 <span className="text-xs font-semibold text-slate-400">คลิกเพื่อเปิดกระดาน Note</span>
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-950 px-3 py-1.5 text-xs font-black text-white shadow-lg shadow-slate-200 transition-transform group-hover:translate-x-0.5">
                   <PlusCircle size={14} /> เปิด / เพิ่ม
@@ -442,7 +474,7 @@ export default function ProjectHub() {
       />
 
       {/* ===== กล่อง 1: Rawdata (ศูนย์กลางข้อมูล) ===== */}
-      <section className="mb-5">
+      <section className="mb-3">
         <h2 className="mb-2 flex items-center gap-2 text-xs font-bold tracking-wide text-slate-400 uppercase">
           <span className="flex h-5 w-5 items-center justify-center rounded-md bg-emerald-100 text-[11px] text-emerald-600">1</span>
           กล่องศูนย์กลางข้อมูล
@@ -469,37 +501,86 @@ export default function ProjectHub() {
             </p>
           </div>
         ) : (
-          <div className="rounded-2xl border border-emerald-200 bg-gradient-to-br from-emerald-50/60 to-white p-5 shadow-sm">
-            <div className="flex items-start gap-3">
-              <div className="rounded-xl bg-emerald-100 p-2.5 text-emerald-600">
-                <CheckCircle2 size={20} />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-bold text-slate-800">{raw.fileName}</p>
-                <p className="text-xs text-slate-400">
-                  {raw.questions.length} ข้อ (คอลัมน์) · {raw.rowCount} แถวคำตอบ ·
-                  อัปเดตล่าสุด {new Date(raw.updatedAt).toLocaleString('th-TH')}
-                </p>
-                <div className="mt-2.5 flex flex-wrap gap-1.5">
-                  {raw.questions.slice(0, 10).map((q) => (
-                    <Badge key={q.id} color={q.type === 'MA' ? 'violet' : 'slate'}>
-                      {q.label}{q.type === 'MA' ? ` · MA×${q.columns.length}` : ''}
-                    </Badge>
-                  ))}
-                  {raw.questions.length > 10 && <Badge color="slate">+{raw.questions.length - 10}</Badge>}
+          <div className="rounded-2xl border border-emerald-200 bg-gradient-to-br from-emerald-50/60 to-white p-4 shadow-sm">
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_21rem]">
+              <div className="min-w-0">
+                <div className="flex items-start gap-3">
+                  <div className="rounded-xl bg-emerald-100 p-2.5 text-emerald-600">
+                    <CheckCircle2 size={20} />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-bold text-slate-800">{raw.fileName}</p>
+                    <p className="text-xs text-slate-400">
+                      {raw.questions.length} ข้อ (คอลัมน์) · {raw.rowCount} แถวคำตอบ ·
+                      อัปเดตล่าสุด {new Date(raw.updatedAt).toLocaleString('th-TH')}
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {raw.questions.slice(0, 9).map((q) => (
+                        <Badge key={q.id} color={q.type === 'MA' ? 'violet' : 'slate'}>
+                          {q.label}{q.type === 'MA' ? ` · MA×${q.columns.length}` : ''}
+                        </Badge>
+                      ))}
+                      {raw.questions.length > 9 && <Badge color="slate">+{raw.questions.length - 9}</Badge>}
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Button variant="soft" size="sm" onClick={() => navigate(`/projects/${projectId}/rawdata`)}>
+                    <Table2 size={14} /> ดูตัวอย่างข้อมูล
+                  </Button>
+                  <Button variant="secondary" size="sm" onClick={() => appendRef.current?.click()} disabled={!!busy}>
+                    <FolderPlus size={14} /> {busy === 'append' ? 'กำลังเพิ่ม…' : 'เพิ่มก้อนข้อมูล'}
+                  </Button>
+                  <Button variant="secondary" size="sm" onClick={() => fileRef.current?.click()} disabled={!!busy}>
+                    <RefreshCcw size={14} /> {busy === 'upload' ? 'กำลังอัปโหลด…' : 'เปลี่ยนไฟล์ทั้งก้อน'}
+                  </Button>
                 </div>
               </div>
-            </div>
-            <div className="mt-4 flex flex-wrap gap-2">
-              <Button variant="soft" size="sm" onClick={() => navigate(`/projects/${projectId}/rawdata`)}>
-                <Table2 size={14} /> ดูตัวอย่างข้อมูล
-              </Button>
-              <Button variant="secondary" size="sm" onClick={() => appendRef.current?.click()} disabled={!!busy}>
-                <FolderPlus size={14} /> {busy === 'append' ? 'กำลังเพิ่ม…' : 'เพิ่มก้อนข้อมูล'}
-              </Button>
-              <Button variant="secondary" size="sm" onClick={() => fileRef.current?.click()} disabled={!!busy}>
-                <RefreshCcw size={14} /> {busy === 'upload' ? 'กำลังอัปโหลด…' : 'เปลี่ยนไฟล์ทั้งก้อน'}
-              </Button>
+
+              <div className="rounded-2xl border border-cyan-100 bg-white/85 p-3 shadow-sm ring-1 ring-white">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-cyan-50 text-cyan-600">
+                      <Activity size={16} />
+                    </span>
+                    <div>
+                      <p className="text-[11px] font-black uppercase tracking-[0.16em] text-cyan-500">Status</p>
+                      <p className="text-sm font-black text-slate-800">สถานะจาก Excel</p>
+                    </div>
+                  </div>
+                  <Badge color={statusSummary.found ? 'emerald' : 'slate'}>
+                    {statusSummary.loading ? 'กำลังอ่าน…' : statusSummary.found ? `${statusSummary.items.length} สถานะ` : 'ไม่พบ'}
+                  </Badge>
+                </div>
+                {statusSummary.found ? (
+                  <div className="grid grid-cols-2 gap-2">
+                    {statusSummary.items.slice(0, 6).map((item, i) => {
+                      const pct = statusSummary.total ? Math.round((item.count / statusSummary.total) * 100) : 0
+                      return (
+                        <div key={item.name} className="rounded-xl border border-slate-100 bg-slate-50/80 px-2.5 py-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="truncate text-xs font-black text-slate-700" title={item.name}>{item.name}</span>
+                            <span className="text-xs font-black text-slate-900">{item.count.toLocaleString('th-TH')}</span>
+                          </div>
+                          <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white">
+                            <div className={`${['bg-emerald-400', 'bg-cyan-400', 'bg-indigo-400', 'bg-amber-400', 'bg-fuchsia-400', 'bg-slate-400'][i % 6]} h-full rounded-full`} style={{ width: `${pct}%` }} />
+                          </div>
+                          <p className="mt-0.5 text-[10px] font-semibold text-slate-400">{pct}%</p>
+                        </div>
+                      )
+                    })}
+                    {statusSummary.items.length > 6 && (
+                      <div className="rounded-xl border border-dashed border-slate-200 bg-white px-2.5 py-2 text-xs font-bold text-slate-400">
+                        +{statusSummary.items.length - 6} สถานะอื่น
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <p className="rounded-xl bg-slate-50 px-3 py-3 text-xs leading-relaxed text-slate-400">
+                    ยังไม่พบคอลัมน์ชื่อ <b>Status</b> ในไฟล์ Excel นี้
+                  </p>
+                )}
+              </div>
             </div>
           </div>
         )}
