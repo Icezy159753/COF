@@ -20,10 +20,84 @@ const BOX_CLS = {
   verbatim: { num: 'bg-amber-100 text-amber-600', icon: 'bg-amber-50 text-amber-500' },
 }
 
+const KEY_HEADER_CANDIDATES = [
+  'sbjnum', 'subjnum', 'sbjno', 'subjno', 'sbj', 'subjectid', 'subject_id',
+  'respondentid', 'respondent_id', 'responseid', 'response_id', 'recordid',
+  'record_id', 'sampleid', 'sample_id', 'userid', 'user_id', 'id', 'key',
+]
+
+const normalizeHeader = (v) => String(v ?? '').toLowerCase().replace(/[^a-z0-9]/g, '')
+const rowSignature = (row) => row.map((v) => String(v ?? '').trim()).join('\u001f')
+
+function detectKeyColumn(rawdata) {
+  const headers = rawdata?.headers ?? []
+  const normalized = headers.map(normalizeHeader)
+  let index = normalized.findIndex((h) => KEY_HEADER_CANDIDATES.includes(h))
+  if (index < 0) index = normalized.findIndex((h) => KEY_HEADER_CANDIDATES.some((k) => h.includes(k)))
+  if (index < 0) return null
+  return { index, label: headers[index], norm: normalized[index] }
+}
+
+function keyedRawdataAudit(oldRawdata, newRawdata) {
+  const oldKey = detectKeyColumn(oldRawdata)
+  const newKey = detectKeyColumn(newRawdata)
+  if (!oldKey || !newKey || oldKey.norm !== newKey.norm) {
+    return { mode: 'no-key', oldKey: oldKey?.label, newKey: newKey?.label }
+  }
+  const makeMap = (rawdata, col) => {
+    const map = new Map()
+    let blank = 0
+    let duplicate = 0
+    rawdata.rows.forEach((row, index) => {
+      const key = String(row[col] ?? '').trim()
+      if (!key) { blank += 1; return }
+      if (map.has(key)) duplicate += 1
+      map.set(key, { row, index })
+    })
+    return { map, blank, duplicate }
+  }
+  const oldMap = makeMap(oldRawdata, oldKey.index)
+  const newMap = makeMap(newRawdata, newKey.index)
+  let added = 0
+  let removed = 0
+  let moved = 0
+  let changed = 0
+  for (const [key, n] of newMap.map) {
+    const o = oldMap.map.get(key)
+    if (!o) { added += 1; continue }
+    if (o.index !== n.index) moved += 1
+    if (rowSignature(o.row) !== rowSignature(n.row)) changed += 1
+  }
+  for (const key of oldMap.map.keys()) if (!newMap.map.has(key)) removed += 1
+  return {
+    mode: 'key',
+    keyLabel: newKey.label,
+    added,
+    removed,
+    moved,
+    changed,
+    duplicate: oldMap.duplicate + newMap.duplicate,
+    blank: oldMap.blank + newMap.blank,
+  }
+}
+
+function keyAuditMessage(audit) {
+  if (!audit) return ''
+  if (audit.mode === 'no-key') {
+    return ` · ยังไม่เจอ Key เดียวกัน (${audit.oldKey || 'เดิมไม่มี'} → ${audit.newKey || 'ใหม่ไม่มี'}) เลย sync จากหัวคอลัมน์+คำตอบ`
+  }
+  return (
+    ` · ตรวจด้วย ${audit.keyLabel}: เพิ่ม ${audit.added} ชุด` +
+    ` · หาย ${audit.removed} ชุด · ย้ายแถว ${audit.moved} ชุด · ข้อมูลเปลี่ยน ${audit.changed} ชุด` +
+    (audit.duplicate ? ` · พบ Key ซ้ำ/ชน ${audit.duplicate} แถว` : '') +
+    (audit.blank ? ` · Key ว่าง ${audit.blank} แถว` : '')
+  )
+}
+
 export default function ProjectHub() {
   const { projectId } = useParams()
   const navigate = useNavigate()
-  const { state, setRawdata, appendRawdata, updateCodeframe, setCodebook, updateProject } = useStore()
+  const { state, setRawdata, appendRawdata, loadRawdata, updateCodeframe, setCodebook, updateProject } = useStore()
   const project = state.projects.find((p) => p.id === projectId)
   const codeframes = state.codeframes.filter((c) => c.projectId === projectId)
 
@@ -68,12 +142,14 @@ export default function ProjectHub() {
     setBusy('upload')
     try {
       const rawdata = await parseRawdataFile(file)
+      const oldRawdata = raw ? await loadRawdata(projectId) : null
       let sync = null
       if (raw && codeframes.length) {
+        const keyAudit = oldRawdata ? keyedRawdataAudit(oldRawdata, rawdata) : null
         const oldIdToLabel = new Map(raw.questions.map((q) => [q.id, q.label]))
         const labelToNewId = new Map(rawdata.questions.map((q) => [q.label, q.id]))
         const cbBy = project.codebook?.byVar
-        sync = { dropped: 0, carried: 0, pending: 0, removed: 0 }
+        sync = { dropped: 0, carried: 0, pending: 0, removed: 0, keyAudit }
         codeframes.forEach((cf) => {
           updateCodeframe(cf.id, (c) => ({
             ...c,
@@ -122,6 +198,7 @@ export default function ProjectHub() {
           message:
             `ใช้ไฟล์ใหม่แทนที่ทั้งก้อน · คง Code เดิม ${sync.carried} mapping · ` +
             `รอลง Code ${sync.pending} คำตอบ · ล้าง mapping เก่าที่ไม่อยู่ในไฟล์ใหม่ ${sync.removed}` +
+            keyAuditMessage(sync.keyAudit) +
             (sync.dropped ? ` · ไฟล์ใหม่ไม่มีบางข้อที่ Codeframe เดิมใช้ ${sync.dropped} รายการ` : ''),
           duration: 9000,
         })
