@@ -94,19 +94,36 @@ function keyAuditMessage(audit) {
   )
 }
 
-function summarizeStatus(rawdata) {
+function findStatusColumn(rawdata) {
   const headers = rawdata?.headers ?? []
-  const statusIndex = headers.findIndex((h) => normalizeHeader(h) === 'status')
-  if (statusIndex < 0) return { found: false, label: '', total: rawdata?.rows?.length ?? 0, items: [] }
+  const norm = (v) => normalizeHeader(String(v ?? '').replace(/^\ufeff/, ''))
+  const candidates = headers.map((h, index) => ({ index, label: String(h ?? '').trim(), norm: norm(h) }))
+  let found = candidates.find((c) => c.norm === 'status')
+  if (!found) found = candidates.find((c) => c.norm.endsWith('status') || c.norm.includes('status'))
+  if (found) return found
+
+  // fallback: บางไฟล์ถูก parse เป็น questions แล้ว label/index ยังอยู่ แม้ headers จะเพี้ยน
+  const q = (rawdata?.questions ?? []).find((x) => {
+    const n = norm(x.label)
+    return n === 'status' || n.endsWith('status') || n.includes('status')
+  })
+  return q ? { index: q.index, label: q.label, norm: norm(q.label) } : null
+}
+
+function summarizeStatus(rawdata) {
+  const statusCol = findStatusColumn(rawdata)
+  if (!statusCol || statusCol.index == null) {
+    return { found: false, label: '', total: rawdata?.rows?.length ?? 0, items: [], debugHeaders: rawdata?.headers ?? [] }
+  }
   const counts = new Map()
   for (const row of rawdata.rows ?? []) {
-    const text = String(row[statusIndex] ?? '').trim() || '(ว่าง)'
+    const text = String(row[statusCol.index] ?? '').trim() || '(ว่าง)'
     counts.set(text, (counts.get(text) ?? 0) + 1)
   }
   const items = [...counts.entries()]
     .map(([name, count]) => ({ name, count }))
     .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'th'))
-  return { found: true, label: headers[statusIndex], total: rawdata.rows?.length ?? 0, items }
+  return { found: true, label: statusCol.label || 'Status', total: rawdata.rows?.length ?? 0, items, debugHeaders: rawdata?.headers ?? [] }
 }
 
 export default function ProjectHub() {
@@ -501,87 +518,41 @@ export default function ProjectHub() {
             </p>
           </div>
         ) : (
-          <div className="rounded-2xl border border-emerald-200 bg-gradient-to-br from-emerald-50/60 to-white p-4 shadow-sm">
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_21rem]">
-              <div className="min-w-0">
-                <div className="flex items-start gap-3">
-                  <div className="rounded-xl bg-emerald-100 p-2.5 text-emerald-600">
-                    <CheckCircle2 size={20} />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-bold text-slate-800">{raw.fileName}</p>
-                    <p className="text-xs text-slate-400">
-                      {raw.questions.length} ข้อ (คอลัมน์) · {raw.rowCount} แถวคำตอบ ·
-                      อัปเดตล่าสุด {new Date(raw.updatedAt).toLocaleString('th-TH')}
-                    </p>
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      {raw.questions.slice(0, 9).map((q) => (
-                        <Badge key={q.id} color={q.type === 'MA' ? 'violet' : 'slate'}>
-                          {q.label}{q.type === 'MA' ? ` · MA×${q.columns.length}` : ''}
-                        </Badge>
-                      ))}
-                      {raw.questions.length > 9 && <Badge color="slate">+{raw.questions.length - 9}</Badge>}
-                    </div>
-                  </div>
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
+            <div className="rounded-2xl border border-emerald-200 bg-gradient-to-br from-emerald-50/60 to-white p-4 shadow-sm">
+              <div className="flex items-start gap-3">
+                <div className="rounded-xl bg-emerald-100 p-2.5 text-emerald-600">
+                  <CheckCircle2 size={20} />
                 </div>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <Button variant="soft" size="sm" onClick={() => navigate(`/projects/${projectId}/rawdata`)}>
-                    <Table2 size={14} /> ดูตัวอย่างข้อมูล
-                  </Button>
-                  <Button variant="secondary" size="sm" onClick={() => appendRef.current?.click()} disabled={!!busy}>
-                    <FolderPlus size={14} /> {busy === 'append' ? 'กำลังเพิ่ม…' : 'เพิ่มก้อนข้อมูล'}
-                  </Button>
-                  <Button variant="secondary" size="sm" onClick={() => fileRef.current?.click()} disabled={!!busy}>
-                    <RefreshCcw size={14} /> {busy === 'upload' ? 'กำลังอัปโหลด…' : 'เปลี่ยนไฟล์ทั้งก้อน'}
-                  </Button>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-bold text-slate-800">{raw.fileName}</p>
+                  <p className="text-xs text-slate-400">
+                    {raw.questions.length} ข้อ (คอลัมน์) · {raw.rowCount} แถวคำตอบ ·
+                    อัปเดตล่าสุด {new Date(raw.updatedAt).toLocaleString('th-TH')}
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {raw.questions.slice(0, 9).map((q) => (
+                      <Badge key={q.id} color={q.type === 'MA' ? 'violet' : 'slate'}>
+                        {q.label}{q.type === 'MA' ? ` · MA×${q.columns.length}` : ''}
+                      </Badge>
+                    ))}
+                    {raw.questions.length > 9 && <Badge color="slate">+{raw.questions.length - 9}</Badge>}
+                  </div>
                 </div>
               </div>
-
-              <div className="rounded-2xl border border-cyan-100 bg-white/85 p-3 shadow-sm ring-1 ring-white">
-                <div className="mb-2 flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-cyan-50 text-cyan-600">
-                      <Activity size={16} />
-                    </span>
-                    <div>
-                      <p className="text-[11px] font-black uppercase tracking-[0.16em] text-cyan-500">Status</p>
-                      <p className="text-sm font-black text-slate-800">สถานะจาก Excel</p>
-                    </div>
-                  </div>
-                  <Badge color={statusSummary.found ? 'emerald' : 'slate'}>
-                    {statusSummary.loading ? 'กำลังอ่าน…' : statusSummary.found ? `${statusSummary.items.length} สถานะ` : 'ไม่พบ'}
-                  </Badge>
-                </div>
-                {statusSummary.found ? (
-                  <div className="grid grid-cols-2 gap-2">
-                    {statusSummary.items.slice(0, 6).map((item, i) => {
-                      const pct = statusSummary.total ? Math.round((item.count / statusSummary.total) * 100) : 0
-                      return (
-                        <div key={item.name} className="rounded-xl border border-slate-100 bg-slate-50/80 px-2.5 py-2">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="truncate text-xs font-black text-slate-700" title={item.name}>{item.name}</span>
-                            <span className="text-xs font-black text-slate-900">{item.count.toLocaleString('th-TH')}</span>
-                          </div>
-                          <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white">
-                            <div className={`${['bg-emerald-400', 'bg-cyan-400', 'bg-indigo-400', 'bg-amber-400', 'bg-fuchsia-400', 'bg-slate-400'][i % 6]} h-full rounded-full`} style={{ width: `${pct}%` }} />
-                          </div>
-                          <p className="mt-0.5 text-[10px] font-semibold text-slate-400">{pct}%</p>
-                        </div>
-                      )
-                    })}
-                    {statusSummary.items.length > 6 && (
-                      <div className="rounded-xl border border-dashed border-slate-200 bg-white px-2.5 py-2 text-xs font-bold text-slate-400">
-                        +{statusSummary.items.length - 6} สถานะอื่น
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <p className="rounded-xl bg-slate-50 px-3 py-3 text-xs leading-relaxed text-slate-400">
-                    ยังไม่พบคอลัมน์ชื่อ <b>Status</b> ในไฟล์ Excel นี้
-                  </p>
-                )}
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button variant="soft" size="sm" onClick={() => navigate(`/projects/${projectId}/rawdata`)}>
+                  <Table2 size={14} /> ดูตัวอย่างข้อมูล
+                </Button>
+                <Button variant="secondary" size="sm" onClick={() => appendRef.current?.click()} disabled={!!busy}>
+                  <FolderPlus size={14} /> {busy === 'append' ? 'กำลังเพิ่ม…' : 'เพิ่มก้อนข้อมูล'}
+                </Button>
+                <Button variant="secondary" size="sm" onClick={() => fileRef.current?.click()} disabled={!!busy}>
+                  <RefreshCcw size={14} /> {busy === 'upload' ? 'กำลังอัปโหลด…' : 'เปลี่ยนไฟล์ทั้งก้อน'}
+                </Button>
               </div>
             </div>
+            <StatusSummaryCard statusSummary={statusSummary} />
           </div>
         )}
         {error && <p className="mt-2 rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-600">{error}</p>}
@@ -625,6 +596,58 @@ export default function ProjectHub() {
 
       <Toast toast={toast} onClose={() => setToast(null)} />
       </div>
+    </div>
+  )
+}
+
+function StatusSummaryCard({ statusSummary }) {
+  return (
+    <div className="rounded-2xl border border-cyan-100 bg-white p-3 shadow-sm ring-1 ring-cyan-50">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-cyan-50 text-cyan-600">
+            <Activity size={16} />
+          </span>
+          <div>
+            <p className="text-[11px] font-black uppercase tracking-[0.16em] text-cyan-500">Status</p>
+            <p className="text-sm font-black text-slate-800">สถานะจาก Excel</p>
+          </div>
+        </div>
+        <Badge color={statusSummary.found ? 'emerald' : 'slate'}>
+          {statusSummary.loading ? 'กำลังอ่าน…' : statusSummary.found ? `${statusSummary.items.length} สถานะ` : 'ไม่พบ'}
+        </Badge>
+      </div>
+      {statusSummary.found ? (
+        <div className="grid grid-cols-2 gap-2">
+          {statusSummary.items.slice(0, 6).map((item, i) => {
+            const pct = statusSummary.total ? Math.round((item.count / statusSummary.total) * 100) : 0
+            return (
+              <div key={item.name} className="rounded-xl border border-slate-100 bg-slate-50/80 px-2.5 py-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="truncate text-xs font-black text-slate-700" title={item.name}>{item.name}</span>
+                  <span className="text-xs font-black text-slate-900">{item.count.toLocaleString('th-TH')}</span>
+                </div>
+                <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white">
+                  <div className={`${['bg-emerald-400', 'bg-cyan-400', 'bg-indigo-400', 'bg-amber-400', 'bg-fuchsia-400', 'bg-slate-400'][i % 6]} h-full rounded-full`} style={{ width: `${pct}%` }} />
+                </div>
+                <p className="mt-0.5 text-[10px] font-semibold text-slate-400">{pct}%</p>
+              </div>
+            )
+          })}
+          {statusSummary.items.length > 6 && (
+            <div className="rounded-xl border border-dashed border-slate-200 bg-white px-2.5 py-2 text-xs font-bold text-slate-400">
+              +{statusSummary.items.length - 6} สถานะอื่น
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="rounded-xl bg-slate-50 px-3 py-3 text-xs leading-relaxed text-slate-400">
+          <p>ยังไม่พบคอลัมน์ชื่อ <b>Status</b> ในไฟล์ Excel นี้</p>
+          {statusSummary.debugHeaders?.length > 0 && (
+            <p className="mt-1 line-clamp-2">หัวคอลัมน์ที่อ่านได้: {statusSummary.debugHeaders.slice(0, 24).join(', ')}</p>
+          )}
+        </div>
+      )}
     </div>
   )
 }
