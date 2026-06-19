@@ -63,10 +63,27 @@ export function AuthProvider({ children }) {
     let cancelled = false
     setPersistence(auth, browserLocalPersistence)
       .then(() => getRedirectResult(auth))
+      .then((result) => {
+        if (cancelled) return
+        const wasRedirecting = window.sessionStorage.getItem('codeframe_login_redirect_pending') === '1'
+        if (result?.user) {
+          window.sessionStorage.removeItem('codeframe_login_redirect_pending')
+          setError('')
+          setSigningIn(false)
+        } else if (wasRedirecting) {
+          window.sessionStorage.removeItem('codeframe_login_redirect_pending')
+          setError('Google กลับมาที่เว็บแล้ว แต่ Firebase ยังไม่ได้ยืนยันผู้ใช้ — ให้ลองกดเข้าสู่ระบบอีกครั้ง หรือเช็กว่า Authorized domains มี codeframe-dp.web.app')
+          setSigningIn(false)
+        }
+      })
       .catch((e) => {
         if (cancelled) return
         console.error('google redirect sign-in failed', e)
-        setError(e?.message || 'เข้าสู่ระบบ Google ไม่สำเร็จ')
+        const msg = e?.code === 'auth/unauthorized-domain'
+          ? 'Domain นี้ยังไม่ได้รับอนุญาตใน Firebase Auth: ต้องเพิ่ม codeframe-dp.web.app ใน Authorized domains ของ project codeframe-dbd8d'
+          : `${e?.code ? `${e.code}: ` : ''}${e?.message || 'เข้าสู่ระบบ Google ไม่สำเร็จ'}`
+        setError(msg)
+        setSigningIn(false)
         setLoading(false)
       })
     const authFallback = setTimeout(() => {
@@ -80,6 +97,10 @@ export function AuthProvider({ children }) {
         unsubProfile = null
       }
       setUser(u)
+      if (u) {
+        setError('')
+        setSigningIn(false)
+      }
       if (!u) {
         setProfile(null)
         setLoading(false)
@@ -132,6 +153,12 @@ export function AuthProvider({ children }) {
       // setPersistence ถูกตั้งตอนโหลด AuthProvider แล้ว — อย่า await ใน click handler ไม่งั้นมือถืออาจบล็อก popup/redirect
       setPersistence(auth, browserLocalPersistence).catch(() => {})
       googleProvider.setCustomParameters({ prompt: 'select_account' })
+      const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '')
+      if (isMobile) {
+        window.sessionStorage.setItem('codeframe_login_redirect_pending', '1')
+        await signInWithRedirect(auth, googleProvider)
+        return
+      }
       const redirectTimer = window.setTimeout(() => {
         setError('ยังไม่เห็นหน้า Google เปิดขึ้น — ถ้าใช้มือถือให้กดปุ่มอีกครั้ง หรือเปิดเว็บใน Chrome โดยตรง')
         setSigningIn(false)
