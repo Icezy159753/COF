@@ -129,21 +129,41 @@ export function AuthProvider({ children }) {
         setSigningIn(false)
         return
       }
-      await setPersistence(auth, browserLocalPersistence)
+      // setPersistence ถูกตั้งตอนโหลด AuthProvider แล้ว — อย่า await ใน click handler ไม่งั้นมือถืออาจบล็อก popup/redirect
+      setPersistence(auth, browserLocalPersistence).catch(() => {})
       googleProvider.setCustomParameters({ prompt: 'select_account' })
-      const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '')
-      if (isMobile) {
-        window.setTimeout(() => {
-          setError('ถ้าหน้า Google ยังไม่เปิด ให้กดปุ่มอีกครั้ง หรือเปิดใน Chrome โดยตรง')
+      const redirectTimer = window.setTimeout(() => {
+        setError('ยังไม่เห็นหน้า Google เปิดขึ้น — ถ้าใช้มือถือให้กดปุ่มอีกครั้ง หรือเปิดเว็บใน Chrome โดยตรง')
+        setSigningIn(false)
+      }, 2500)
+      try {
+        await signInWithPopup(auth, googleProvider)
+        window.clearTimeout(redirectTimer)
+        setSigningIn(false)
+        return
+      } catch (popupErr) {
+        if (popupErr?.code === 'auth/popup-closed-by-user' || popupErr?.code === 'auth/cancelled-popup-request') {
+          window.clearTimeout(redirectTimer)
           setSigningIn(false)
-        }, 3500)
+          return
+        }
+        if (popupErr?.code === 'auth/unauthorized-domain') {
+          window.clearTimeout(redirectTimer)
+          setError('Domain นี้ยังไม่ได้รับอนุญาตใน Firebase Auth: ต้องเพิ่ม codeframe-dp.web.app ใน Authorized domains ของ project codeframe-dbd8d')
+          setSigningIn(false)
+          return
+        }
+        // มือถือบางเครื่องบล็อก popup → ใช้ redirect ต่อ แต่ไม่ให้ปุ่มค้างถ้า redirect ไม่ออก
         await signInWithRedirect(auth, googleProvider)
         return
       }
-      await signInWithPopup(auth, googleProvider)
-      setSigningIn(false)
     } catch (e) {
       if (e?.code === 'auth/popup-closed-by-user' || e?.code === 'auth/cancelled-popup-request') {
+        setSigningIn(false)
+        return
+      }
+      if (e?.code === 'auth/unauthorized-domain') {
+        setError('Domain นี้ยังไม่ได้รับอนุญาตใน Firebase Auth: ต้องเพิ่ม codeframe-dp.web.app ใน Authorized domains ของ project codeframe-dbd8d')
         setSigningIn(false)
         return
       }
