@@ -159,28 +159,21 @@ export function AuthProvider({ children }) {
         await signInWithRedirect(auth, googleProvider)
         return
       }
-      const redirectTimer = window.setTimeout(() => {
-        setError('ยังไม่เห็นหน้า Google เปิดขึ้น — ถ้าใช้มือถือให้กดปุ่มอีกครั้ง หรือเปิดเว็บใน Chrome โดยตรง')
-        setSigningIn(false)
-      }, 2500)
       try {
         await signInWithPopup(auth, googleProvider)
-        window.clearTimeout(redirectTimer)
         setSigningIn(false)
         return
       } catch (popupErr) {
         if (popupErr?.code === 'auth/popup-closed-by-user' || popupErr?.code === 'auth/cancelled-popup-request') {
-          window.clearTimeout(redirectTimer)
           setSigningIn(false)
           return
         }
         if (popupErr?.code === 'auth/unauthorized-domain') {
-          window.clearTimeout(redirectTimer)
           setError('Domain นี้ยังไม่ได้รับอนุญาตใน Firebase Auth: ต้องเพิ่ม codeframe-dp.web.app ใน Authorized domains ของ project codeframe-dbd8d')
           setSigningIn(false)
           return
         }
-        // มือถือบางเครื่องบล็อก popup → ใช้ redirect ต่อ แต่ไม่ให้ปุ่มค้างถ้า redirect ไม่ออก
+        // ถ้า browser บล็อก popup จริง ๆ ค่อยใช้ redirect ต่อ
         await signInWithRedirect(auth, googleProvider)
         return
       }
