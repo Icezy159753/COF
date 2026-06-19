@@ -519,12 +519,16 @@ export default function CodeframeEditor() {
   // Group CE อัตโนมัติด้วย AI: อ่าน Code ปัจจุบัน + คำตอบที่ยังไม่จัด
   //   → จับเข้า Code เดิม (ถ้าความหมายตรง) · สร้าง Code ใหม่ + ลงให้ (ถ้าไม่มี) + ไฮไลต์ตัวใหม่
   const runGroupCE = async () => {
-    const targets = answers.filter((a) => !(sheet.assignments[a.key] ?? []).length)
+    const flatCodes = sheet.nets.flatMap((n) => n.codes)
+    const genericCodeIds = new Set(flatCodes.filter(isGenericAiMatchCode).map((c) => c.id))
+    const targets = answers.filter((a) => {
+      const ids = sheet.assignments[a.key] ?? []
+      return !ids.length || ids.every((id) => genericCodeIds.has(id))
+    })
     if (!targets.length) {
       setToast({ type: 'info', title: 'จัดกลุ่มครบแล้ว', message: 'ไม่มีคำตอบที่ยังไม่ได้จัดกลุ่มเหลือให้ทำ' })
       return
     }
-    const flatCodes = sheet.nets.flatMap((n) => n.codes)
     const reusableCodes = flatCodes
       .map((code, originalIndex) => ({ code, originalIndex }))
       .filter(({ code }) => !isGenericAiMatchCode(code))
@@ -559,11 +563,14 @@ export default function CodeframeEditor() {
         }
       })
       const newIds = newCodes.map((c) => c.id)
+      const targetKeys = new Set(targets.map((a) => a.key))
       updateSheet((s) => {
         const nets = s.nets.length ? s.nets.map((n) => ({ ...n, codes: [...n.codes] })) : [{ id: uid(), name: '', level: 0, codes: [] }]
         const last = nets[nets.length - 1]
         last.codes.push(...newCodes) // Code ใหม่ต่อท้ายกลุ่มสุดท้าย
-        return { ...s, nets, assignments: { ...s.assignments, ...addAssign } }
+        const assignments = { ...s.assignments }
+        for (const key of targetKeys) delete assignments[key]
+        return { ...s, nets, assignments: { ...assignments, ...addAssign } }
       })
       // ไฮไลต์ Code ที่สร้างใหม่ — ค้างไว้จนกว่าจะเปลี่ยนชีท + เลื่อนไปหาตัวแรก
       if (newIds.length) {
