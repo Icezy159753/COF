@@ -110,7 +110,10 @@ function buildAssignPrompt(body) {
   return jsonOnly('{"assign":[0,-1,2]} assign length equals verbatims length; values are code index or -1', { codes: body.codes || [], verbatims: body.verbatims || [] })
 }
 function buildGroupCePrompt(body) {
-  return jsonOnly('{"assign":[{"existing":0},{"neo":"new code label"},null]} assign length equals verbatims length', { codes: body.codes || [], verbatims: body.verbatims || [] })
+  return jsonOnly(
+    '{"assign":[{"existing":0},{"neo":"new code label"},null]} assign length equals verbatims length. Use existing ONLY when an existing code label is specific and semantically exact. If codes is empty or existing labels are generic placeholders, create neo labels. Do NOT assign many unrelated verbatims into a broad placeholder such as ระบุ, โปรดระบุ, อื่นๆ ระบุ, other/specify, misc, none. Cluster similar verbatims into the same neo label; make concise Thai code labels.',
+    { codes: body.codes || [], verbatims: body.verbatims || [] },
+  )
 }
 
 const server = http.createServer(async (req, res) => {

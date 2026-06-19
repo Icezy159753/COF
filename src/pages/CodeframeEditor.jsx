@@ -83,6 +83,22 @@ const NET_LEVELS = [
 ]
 const NET_LABEL = { 1: 'Net', 2: 'Subnet', 3: 'Subsubnet', 4: 'Subsubsubnet', 5: 'Subsubsubsubnet' }
 
+function normalizeCodeLabel(value) {
+  return String(value ?? '').toLowerCase().replace(/[^a-z0-9ก-๙]/g, '')
+}
+
+function isGenericAiMatchCode(code) {
+  const label = String(code?.thai || code?.label || '').trim()
+  const norm = normalizeCodeLabel(label)
+  if (!norm) return true
+  if (isOtherLabel(label)) return true
+  // SPSS/CE placeholder rows like "ระบุ................" are containers for free text,
+  // not semantic codes. Never let AI match every verbatim into these.
+  if (norm === 'ระบุ' || norm === 'โปรดระบุ' || norm === 'อื่นๆระบุ' || norm === 'อื่นระบุ') return true
+  if (/^ระบุ[\.\-_\s…]*$/i.test(label)) return true
+  return false
+}
+
 // จัดลำดับ codes ในกลุ่มเดียว ตามรหัสที่เลือก (sel) + ทิศทาง up/down/top/bottom
 function reorderCodes(codes, sel, dir) {
   if (!codes.some((c) => sel.has(c.id))) return codes
@@ -509,7 +525,11 @@ export default function CodeframeEditor() {
       return
     }
     const flatCodes = sheet.nets.flatMap((n) => n.codes)
-    const codeItems = flatCodes.map((c, i) => ({ i, label: c.thai || c.codeNo }))
+    const reusableCodes = flatCodes
+      .map((code, originalIndex) => ({ code, originalIndex }))
+      .filter(({ code }) => !isGenericAiMatchCode(code))
+    const skippedGeneric = flatCodes.length - reusableCodes.length
+    const codeItems = reusableCodes.map(({ code }, i) => ({ i, label: code.thai || code.codeNo }))
     const vItems = targets.map((a, i) => ({ i, text: a.text, count: a.count }))
 
     setAiBusy('AI กำลังจัดกลุ่ม')
@@ -524,8 +544,8 @@ export default function CodeframeEditor() {
       assign.forEach((entry, i) => {
         if (!entry) return
         const key = targets[i].key
-        if (entry.existing != null && flatCodes[entry.existing]) {
-          addAssign[key] = [flatCodes[entry.existing].id]
+        if (entry.existing != null && reusableCodes[entry.existing]?.code) {
+          addAssign[key] = [reusableCodes[entry.existing].code.id]
           matched += 1
         } else if (entry.neo) {
           let id = newByLabel.get(entry.neo)
@@ -553,7 +573,7 @@ export default function CodeframeEditor() {
       setToast({
         type: 'success',
         title: 'Group CE เสร็จแล้ว',
-        message: `จับเข้า Code เดิม ${matched} คำตอบ · สร้าง Code ใหม่ ${newCodes.length} รหัส (ไฮไลต์เหลืองให้แล้ว)`,
+        message: `จับเข้า Code เดิม ${matched} คำตอบ · สร้าง Code ใหม่ ${newCodes.length} รหัส${skippedGeneric ? ` · ข้าม Code placeholder ${skippedGeneric} รหัส` : ''} (ไฮไลต์เหลืองให้แล้ว)`,
         duration: 7000,
       })
     } catch (err) {
