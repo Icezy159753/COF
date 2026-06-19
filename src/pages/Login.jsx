@@ -1,4 +1,4 @@
-import { LayoutGrid, LockKeyhole } from 'lucide-react'
+import { LayoutGrid, Loader2, LockKeyhole } from 'lucide-react'
 import { useAuth } from '../lib/auth.jsx'
 
 function GoogleMark() {
@@ -25,7 +25,7 @@ function GoogleMark() {
 }
 
 export default function Login() {
-  const { signInWithGoogle, error } = useAuth()
+  const { signInWithGoogle, signingIn, error } = useAuth()
 
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[radial-gradient(circle_at_top_left,#eef2ff_0,#f8fafc_36%,#f8fafc_100%)] px-5 py-10">
@@ -65,12 +65,13 @@ export default function Login() {
 
             <button
               onClick={signInWithGoogle}
-              className="group flex w-full items-center justify-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3.5 text-sm font-black text-slate-700 shadow-sm transition-all hover:-translate-y-0.5 hover:border-indigo-200 hover:bg-indigo-50/40 hover:shadow-xl hover:shadow-indigo-100 active:scale-[0.99]"
+              disabled={signingIn}
+              className="group flex w-full items-center justify-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3.5 text-sm font-black text-slate-700 shadow-sm transition-all hover:-translate-y-0.5 hover:border-indigo-200 hover:bg-indigo-50/40 hover:shadow-xl hover:shadow-indigo-100 active:scale-[0.99] disabled:cursor-wait disabled:opacity-70 disabled:hover:translate-y-0"
             >
               <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-white shadow-sm ring-1 ring-slate-100 transition-transform group-hover:scale-105">
-                <GoogleMark />
+                {signingIn ? <Loader2 size={18} className="animate-spin text-indigo-500" /> : <GoogleMark />}
               </span>
-              เข้าสู่ระบบด้วย Google
+              {signingIn ? 'กำลังเปิด Google…' : 'เข้าสู่ระบบด้วย Google'}
             </button>
 
             {error ? (

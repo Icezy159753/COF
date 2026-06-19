@@ -10,6 +10,7 @@ import {
 } from 'firebase/auth'
 import { doc, getDoc, setDoc, onSnapshot, serverTimestamp } from 'firebase/firestore'
 import { auth, googleProvider, db } from './firebase.js'
+import { firebaseConfig } from './firebaseConfig.js'
 
 // อีเมลนี้เป็น SuperAdmin ถาวร (bootstrap สิทธิ์สูงสุด)
 export const SUPERADMIN_EMAIL = 'songklod159@gmail.com'
@@ -55,6 +56,7 @@ export function AuthProvider({ children }) {
   const [profile, setProfile] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [signingIn, setSigningIn] = useState(false)
 
   useEffect(() => {
     let unsubProfile = null
@@ -120,26 +122,43 @@ export function AuthProvider({ children }) {
 
   async function signInWithGoogle() {
     setError('')
+    setSigningIn(true)
     try {
+      if (!firebaseConfig.apiKey || firebaseConfig.apiKey.includes('...')) {
+        setError('Firebase API key ยังไม่ใช่ key จริงของ backend codeframe-dbd8d — ต้องใส่ Web API key จริงก่อนจึงล็อกอินได้')
+        setSigningIn(false)
+        return
+      }
       await setPersistence(auth, browserLocalPersistence)
+      googleProvider.setCustomParameters({ prompt: 'select_account' })
       const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '')
       if (isMobile) {
+        window.setTimeout(() => {
+          setError('ถ้าหน้า Google ยังไม่เปิด ให้กดปุ่มอีกครั้ง หรือเปิดใน Chrome โดยตรง')
+          setSigningIn(false)
+        }, 3500)
         await signInWithRedirect(auth, googleProvider)
         return
       }
       await signInWithPopup(auth, googleProvider)
+      setSigningIn(false)
     } catch (e) {
-      if (e?.code === 'auth/popup-closed-by-user' || e?.code === 'auth/cancelled-popup-request') return
+      if (e?.code === 'auth/popup-closed-by-user' || e?.code === 'auth/cancelled-popup-request') {
+        setSigningIn(false)
+        return
+      }
       if (e?.code === 'auth/popup-blocked' || e?.code === 'auth/operation-not-supported-in-this-environment') {
         try {
           await signInWithRedirect(auth, googleProvider)
           return
         } catch (redirectErr) {
           setError(redirectErr?.message || 'เข้าสู่ระบบ Google ไม่สำเร็จ')
+          setSigningIn(false)
           return
         }
       }
       setError(e?.message || 'เข้าสู่ระบบไม่สำเร็จ')
+      setSigningIn(false)
     }
   }
 
@@ -172,6 +191,7 @@ export function AuthProvider({ children }) {
         isAdmin,
         canManage,
         loading,
+        signingIn,
         error,
         signInWithGoogle,
         signOutUser,
