@@ -2695,14 +2695,14 @@ export default function CodeframeEditor() {
   }
 
   // Export 2: เฉพาะ Rawdata ที่ลง Code แล้ว (เขียนทับค่าอื่นๆ + ไฮไลต์จุดที่แก้)
-  const handleExportData = () => {
+  const handleExportData = async () => {
     try {
       if (!rawdata) {
         setToast({ type: 'warning', title: 'ยังโหลดข้อมูลไม่เสร็จ', message: 'กรุณารอสักครู่แล้วลองใหม่' })
         return
       }
       const base = (project.rawMeta?.fileName ?? project.name ?? 'rawdata').replace(/\.(xlsx|xls|csv)$/i, '')
-      exportCodedData(rawdata, cf, project.codebook, `${base}_coded.xlsx`)
+      await exportCodedData(rawdata, cf, project.codebook, `${base}_coded.xlsx`)
     } catch (err) {
       setToast({ type: 'warning', title: 'Export Data ไม่สำเร็จ', message: err.message, duration: 8000 })
     }

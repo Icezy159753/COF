@@ -40,3 +40,9 @@ data test/
 *.xlsx
 *.xls
 *.csv
+
+# Backup ข้อมูลโปรเจกต์ (JSON ข้อมูลจริง) และเอกสาร/ไฟล์งานในเครื่อง — ไม่เอาขึ้น repo
+backups/
+docs/*
+# ยกเว้นใบส่งงาน JS ↔ Claude ที่ต้องแชร์ใน repo
+!docs/JS_CLAUDE_HANDOFF.md

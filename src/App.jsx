@@ -1,16 +1,19 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, lazy, Suspense } from 'react'
 import { Routes, Route, Link, useLocation } from 'react-router-dom'
 import { LayoutGrid, LogOut, Users, Cpu, ShieldCheck, RefreshCw } from 'lucide-react'
 import { useAuth } from './lib/auth.jsx'
-import Dashboard from './pages/Dashboard.jsx'
-import Members from './pages/Members.jsx'
-import AiProviders from './pages/AiProviders.jsx'
-import OpsCenter from './pages/OpsCenter.jsx'
-import ProjectHub from './pages/ProjectHub.jsx'
-import BoxPage from './pages/BoxPage.jsx'
-import CodeframeEditor from './pages/CodeframeEditor.jsx'
-import RawdataViewer from './pages/RawdataViewer.jsx'
-import VerbatimEditor from './pages/VerbatimEditor.jsx'
+import { LoadingAnimation } from './store.jsx'
+
+// แยกโหลดทีละหน้า (code-splitting) — เปิดแอปครั้งแรกโหลดเฉพาะหน้าที่ใช้
+const Dashboard = lazy(() => import('./pages/Dashboard.jsx'))
+const Members = lazy(() => import('./pages/Members.jsx'))
+const AiProviders = lazy(() => import('./pages/AiProviders.jsx'))
+const OpsCenter = lazy(() => import('./pages/OpsCenter.jsx'))
+const ProjectHub = lazy(() => import('./pages/ProjectHub.jsx'))
+const BoxPage = lazy(() => import('./pages/BoxPage.jsx'))
+const CodeframeEditor = lazy(() => import('./pages/CodeframeEditor.jsx'))
+const RawdataViewer = lazy(() => import('./pages/RawdataViewer.jsx'))
+const VerbatimEditor = lazy(() => import('./pages/VerbatimEditor.jsx'))
 
 const ROLE_LABEL = { superadmin: 'SuperAdmin', admin: 'Admin', member: 'Member' }
 
@@ -143,6 +146,7 @@ export default function App() {
       </header>
 
       <main className="flex-1">
+        <Suspense fallback={<LoadingAnimation full={false} label="กำลังโหลดหน้า" />}>
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/ops" element={<OpsCenter />} />
@@ -168,6 +172,7 @@ export default function App() {
             }
           />
         </Routes>
+        </Suspense>
       </main>
 
     </div>

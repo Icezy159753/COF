@@ -209,12 +209,17 @@ export default function RawdataViewer() {
     setFilterPopover({ col: ci, x, y: rect.bottom })
   }
 
-  const handleExport = () => {
+  const handleExport = async () => {
     if (!rawdata) return
     const base = (project.rawMeta?.fileName ?? 'rawdata').replace(/\.(xlsx|xls|csv)$/i, '')
     const suffix = query || activeFilterCount ? '_filtered' : ''
-    if (coded) exportRawdataWithEdits(headers, rows, masks, editedCols, `${base}_coded${suffix}.xlsx`, coded.editLog ?? [])
-    else exportRawdataXlsx(headers, rows, `${base}${suffix}.xlsx`)
+    try {
+      if (coded) await exportRawdataWithEdits(headers, rows, masks, editedCols, `${base}_coded${suffix}.xlsx`, coded.editLog ?? [])
+      else await exportRawdataXlsx(headers, rows, `${base}${suffix}.xlsx`)
+    } catch (err) {
+      console.error(err)
+      window.alert(`Export ไม่สำเร็จ: ${err?.message || err}`)
+    }
   }
 
   useEffect(() => {

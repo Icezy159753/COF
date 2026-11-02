@@ -1,6 +1,16 @@
-import * as XLSX from 'xlsx'
-import * as XLSXStyle from 'xlsx-js-style' // fork ที่รองรับสีพื้นเซลล์ (ใช้ตอน export)
-import ExcelJS from 'exceljs' // ใช้ตอน export Codeframe — รองรับสี "แถบชีท" (tabColor) จริง
+// ไลบรารี Excel ขนาดใหญ่ → โหลดแบบ lazy เฉพาะตอนอ่าน/ส่งออกไฟล์จริง (ไม่ให้หน่วงการเปิดแอปครั้งแรก)
+// xlsx = อ่านไฟล์ · xlsx-js-style = fork ที่รองรับสีพื้นเซลล์ (ใช้ตอน export) · exceljs = export Codeframe (รองรับสี "แถบชีท" tabColor)
+const cjsNs = (m) => (m?.utils ? m : m?.default ?? m) // กัน interop CJS ต่างกันระหว่าง Vite/Node
+const loadXLSX = () => import('xlsx').then(cjsNs)
+const loadXLSXStyle = () => import('xlsx-js-style').then(cjsNs)
+const loadExcelJS = () => import('exceljs').then((m) => m.default ?? m)
+
+// แปลง {r,c} (นับจาก 0) → อ้างอิงเซลล์แบบ A1 — แทน utils.encode_cell เพื่อไม่ต้องโหลดไลบรารี
+function encodeCell({ r, c }) {
+  let col = ''
+  for (let n = c + 1; n > 0; n = Math.floor((n - 1) / 26)) col = String.fromCharCode(65 + ((n - 1) % 26)) + col
+  return `${col}${r + 1}`
+}
 import { findOtherColumns, isOtherLabel, shortSheetName, closedQuestionGroupColumns, questionGroupBase, otherColumnsForCode, otherCodeFromColumnLabel } from './boxes.js'
 
 const normalizeRuleText = (v) => String(v ?? '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\u00A0/g, ' ').replace(/\s+/g, ' ').trim()
@@ -486,20 +496,20 @@ function styleEdits(ws, editMaskRows, editedCols) {
     alignment: { horizontal: 'center' },
   }
   for (const c of editedCols) {
-    const ref = XLSXStyle.utils.encode_cell({ r: 0, c })
+    const ref = encodeCell({ r: 0, c })
     if (!ws[ref]) ws[ref] = { t: 's', v: '' }
     ws[ref].s = headerStyle
   }
   editMaskRows.forEach((set, r) => {
     for (const c of set) {
-      const ref = XLSXStyle.utils.encode_cell({ r: r + 1, c }) // +1 เพราะแถว 0 = หัวตาราง
+      const ref = encodeCell({ r: r + 1, c }) // +1 เพราะแถว 0 = หัวตาราง
       if (!ws[ref]) ws[ref] = { t: 's', v: '' }
       ws[ref].s = cellStyle
     }
   })
 }
 
-function appendRecodeLogSheet(wb, editLog = []) {
+function appendRecodeLogSheet(XLSXStyle, wb, editLog = []) {
   if (!editLog.length) return
   const logHeaders = [
     'row_key_header', 'row_key', 'raw_row_no', 'sheet', 'question', 'text_question',
@@ -520,7 +530,8 @@ function appendRecodeLogSheet(wb, editLog = []) {
 
 // ---------- Export Rawdata (ที่แสดง/กรองในหน้า Viewer) พร้อมไฮไลต์จุดที่แก้ ----------
 // rows = แถวที่กรองแล้ว · masks = Set<col> ของจุดที่แก้ ต่อแถว (เรียงตรงกับ rows)
-export function exportRawdataWithEdits(headers, rows, masks, editedCols, fileName, editLog = []) {
+export async function exportRawdataWithEdits(headers, rows, masks, editedCols, fileName, editLog = []) {
+  const XLSXStyle = await loadXLSXStyle()
   const toCell = (v) => {
     if (typeof v !== 'string') return v
     if (/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(v)) {
@@ -535,12 +546,13 @@ export function exportRawdataWithEdits(headers, rows, masks, editedCols, fileNam
   styleEdits(ws, masks ?? [], editedCols ?? new Set())
   const wb = XLSXStyle.utils.book_new()
   XLSXStyle.utils.book_append_sheet(wb, ws, 'Rawdata + Code')
-  appendRecodeLogSheet(wb, editLog)
+  appendRecodeLogSheet(XLSXStyle, wb, editLog)
   XLSXStyle.writeFile(wb, fileName.endsWith('.xlsx') ? fileName : `${fileName}.xlsx`)
 }
 
 // ---------- Export Data: Rawdata ที่ลง Code แล้ว (เขียนทับอื่นๆ + ไฮไลต์) ----------
-export function exportCodedData(rawdata, codeframe, codebook, fileName) {
+export async function exportCodedData(rawdata, codeframe, codebook, fileName) {
+  const XLSXStyle = await loadXLSXStyle()
   const { rows, editMaskRows, editedCols, editLog } = buildOverwrittenRawdata(rawdata, codeframe, codebook)
   const headers = rawdata.headers ?? []
   const toCell = (v) => {
@@ -557,7 +569,7 @@ export function exportCodedData(rawdata, codeframe, codebook, fileName) {
   styleEdits(ws, editMaskRows, editedCols)
   const wb = XLSXStyle.utils.book_new()
   XLSXStyle.utils.book_append_sheet(wb, ws, 'Rawdata + Code')
-  appendRecodeLogSheet(wb, editLog)
+  appendRecodeLogSheet(XLSXStyle, wb, editLog)
   XLSXStyle.writeFile(wb, fileName.endsWith('.xlsx') ? fileName : `${fileName}.xlsx`)
 }
 
@@ -565,6 +577,7 @@ export function exportCodedData(rawdata, codeframe, codebook, fileName) {
 // แถวแรก = ชื่อข้อ/คอลัมน์ (เช่น ID, Q28, Q28_1, P15_1)
 // แถวถัดไป = คำตอบของผู้ตอบแต่ละคน
 export async function parseRawdataFile(file) {
+  const XLSX = await loadXLSX()
   const buf = await file.arrayBuffer()
   const wb = XLSX.read(buf)
   const ws = wb.Sheets[wb.SheetNames[0]]
@@ -614,6 +627,7 @@ function buildQuestions(headers) {
 // คอลัมน์: Code No. | ThaiGroup | ThaiGroup2 | English
 // แถวที่ ThaiGroup ขึ้นต้นด้วย "Net" = หัวข้อกลุ่ม, แถวที่มี Code No. = รหัส
 export async function parseFrameFile(file, makeId) {
+  const XLSX = await loadXLSX()
   const buf = await file.arrayBuffer()
   const wb = XLSX.read(buf)
   const ws = wb.Sheets[wb.SheetNames[0]]
@@ -765,7 +779,7 @@ function styleCodeColumns(ws, rowCount, codeCols) {
   }
   for (let r = 0; r < rowCount; r++) {
     for (const c of codeCols) {
-      const ref = XLSXStyle.utils.encode_cell({ r, c })
+      const ref = encodeCell({ r, c })
       if (!ws[ref]) ws[ref] = { t: 's', v: '' }
       ws[ref].s = r === 0 ? headerStyle : cellStyle
     }
@@ -791,6 +805,7 @@ export function freqHeadersForQuestions(questions) {
 }
 
 export async function exportCodeframe(codeframe, job, getSheetColor, getSheetInfo, options = {}) {
+  const ExcelJS = await loadExcelJS()
   const customer = options.preset === 'customer'
   const freqByCode = options.freqByCode || null
   const freqByCodeByQuestion = options.freqByCodeByQuestion || null
@@ -947,6 +962,7 @@ export async function exportCodeframeSheet(codeframe, sheet, job, getSheetColor,
 // ---------- Export Question List เป็น Excel (รายการโจทย์ที่แสดงในหน้าเว็บ) ----------
 // rows: [{ sheetNo, sheetName, variable, column, question, codeCount, status }]
 export async function exportQuestionList(rows, fileName = 'questions_export.xlsx') {
+  const ExcelJS = await loadExcelJS()
   const wb = new ExcelJS.Workbook()
   wb.creator = 'COF Codeframe Studio'
   wb.created = new Date()
@@ -1024,6 +1040,7 @@ function colWidthsFromAoA(aoa, { min = 5, max = 40 } = {}) {
 // แถวแรกของแต่ละข้อ = เลขข้อ + variable + ข้อความโจทย์
 // แถวถัดไป = value code + label ในคอลัมน์ C และ frequency ในคอลัมน์ D
 export async function exportQuestionCodeList(rows, fileName = 'questions_and_codes.xlsx') {
+  const ExcelJS = await loadExcelJS()
   const wb = new ExcelJS.Workbook()
   wb.creator = 'COF Codeframe Studio'
   wb.created = new Date()
@@ -1092,7 +1109,8 @@ export async function exportQuestionCodeList(rows, fileName = 'questions_and_cod
 // ---------- Export Rawdata ดิบ (headers + rows) เป็น Excel ----------
 // rows = array ของ array (ค่าตามที่แสดง/กรองในหน้า Viewer)
 // codeCols = Set ของ index คอลัมน์ Code (ถ้ามี → ลงสีไฮไลต์เหมือนชีท "Rawdata + Code")
-export function exportRawdataXlsx(headers, rows, fileName, codeCols) {
+export async function exportRawdataXlsx(headers, rows, fileName, codeCols) {
+  const XLSXStyle = await loadXLSXStyle()
   // แปลงเป็นตัวเลขถ้าเป็นจำนวนล้วน (ไม่มี 0 นำหน้า เพื่อกันรหัส/ID ที่มี 0 นำ) — ตัดสามเหลี่ยมเขียว
   const toCell = (v) => {
     if (typeof v !== 'string') return v
