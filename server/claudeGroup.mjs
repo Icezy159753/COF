@@ -69,9 +69,21 @@ const SYSTEM_PROMPT =
   'You are a precise text classifier for coding Thai open-ended (OE) survey responses. ' +
   'You output only a single JSON object — no prose, no markdown.'
 
+// ชื่อ model มาจาก request body → ต้องผ่าน allow-list ตัวอักษรก่อนส่งเป็น argument ของ CLI
+// (กัน command injection ตอน spawn ผ่าน shell บน Windows และกัน flag แปลก ๆ เช่น "--xyz")
+const SAFE_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,127}$/
+export function assertSafeModel(model) {
+  if (model == null || model === '') return model
+  if (typeof model !== 'string' || !SAFE_MODEL_RE.test(model)) throw new Error('ชื่อ model ไม่ถูกต้อง')
+  return model
+}
+// shell จำเป็นเฉพาะ Windows (.cmd / ชื่อเปล่า) — บน Linux/macOS spawn ตรง ๆ เสมอ ไม่ผ่าน shell
+const IS_WINDOWS = process.platform === 'win32'
+
 function spawnClaude(prompt, model, timeoutMs) {
+  assertSafeModel(model)
   const exe = resolveClaudeExe()
-  const useShell = exe === 'claude' // ใช้ shell เฉพาะตอน fallback (หา exe ตรง ๆ ไม่เจอ)
+  const useShell = IS_WINDOWS && exe === 'claude' // ใช้ shell เฉพาะตอน fallback บน Windows (หา exe ตรง ๆ ไม่เจอ)
 
   // spawn .exe ตรง ๆ (ไม่ผ่าน cmd shell) → เร็วกว่ามาก และ stdin ภาษาไทยไม่เพี้ยน
   // ตัด overhead ของ Claude Code: แทน system prompt เป็นตัวเล็ก, ปิด tools/skills/MCP
@@ -130,8 +142,9 @@ function resolveCodexExe() {
 }
 
 function spawnCodex(prompt, model, timeoutMs) {
+  assertSafeModel(model)
   const exe = resolveCodexExe()
-  const useShell = !exe.toLowerCase().endsWith('.exe') // .cmd / 'codex' ต้องผ่าน shell บน Windows
+  const useShell = IS_WINDOWS && !exe.toLowerCase().endsWith('.exe') // .cmd / 'codex' ต้องผ่าน shell บน Windows เท่านั้น
   const outFile = join(tmpdir(), `codex-out-${Date.now()}-${Math.floor(Math.random() * 1e6)}.txt`)
 
   // reasoning effort ต่ำ → เร็วขึ้น/ประหยัด token (งานเราเป็น classification ไม่ต้องคิดเยอะ)

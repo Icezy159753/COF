@@ -16,6 +16,7 @@ import { uniqueAnswers } from '../lib/answers.js'
 import { parseSavCodebook, remapCodebookByPosition } from '../lib/spss.js'
 import { BOX_META, newRowCount, freqByValue, isOtherLabel } from '../lib/boxes.js'
 import { Button, Badge, NewRowsBadge, Toast } from '../components/ui.jsx'
+import { authHeaders } from '../lib/apiAuth.js'
 
 const nowMs = () => Date.now()
 
@@ -400,7 +401,7 @@ export default function ProjectHub() {
     try {
       const res = await fetch(apiUrl('/api/send-ci-review-email'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           ciEmail,
           editEmail,

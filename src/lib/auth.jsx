@@ -12,6 +12,10 @@ import {
 import { doc, getDoc, setDoc, onSnapshot, serverTimestamp } from 'firebase/firestore'
 import { auth, googleProvider, db } from './firebase.js'
 import { firebaseConfig } from './firebaseConfig.js'
+import { setApiTokenProvider } from './apiAuth.js'
+
+// ทุก request ไป AI backend แนบ ID token ของผู้ใช้ปัจจุบัน (SDK refresh ให้อัตโนมัติเมื่อใกล้หมดอายุ)
+setApiTokenProvider(() => auth.currentUser?.getIdToken() ?? null)
 
 // อีเมลนี้เป็น SuperAdmin ถาวร (bootstrap สิทธิ์สูงสุด)
 export const SUPERADMIN_EMAIL = 'songklod159@gmail.com'

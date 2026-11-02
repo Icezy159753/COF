@@ -97,7 +97,8 @@ async function loadActiveReview(token) {
   const linkSnap = await linkRef.get()
   if (!linkSnap.exists) throw Object.assign(new Error('ลิงก์ Review นี้ไม่ถูกต้องหรือถูกปิดแล้ว'), { status: 404 })
   const link = { id: linkSnap.id, ...linkSnap.data() }
-  if (link.status && link.status !== 'active') throw Object.assign(new Error('ลิงก์ Review นี้ถูกปิดใช้งานแล้ว'), { status: 403 })
+  // ต้องเป็น 'active' ชัด ๆ เท่านั้น (ลิงก์ที่ไม่มี status ถือว่าปิด — fail closed เหมือน firestore.rules)
+  if (link.status !== 'active') throw Object.assign(new Error('ลิงก์ Review นี้ถูกปิดใช้งานแล้ว'), { status: 403 })
   if (!link.codeframeId) throw Object.assign(new Error('Review link ไม่มี codeframeId'), { status: 400 })
   const cfRef = firestore.collection('codeframes').doc(link.codeframeId)
   const cfSnap = await cfRef.get()
@@ -146,10 +147,31 @@ async function parseSavBuffer(buffer) {
   return { byVar, varCount: Object.keys(byVar).length }
 }
 
+// ต้องเป็นผู้ใช้ที่ล็อกอิน (Firebase ID token) และได้รับอนุมัติแล้ว (users/{uid}.status == 'approved')
+async function requireApprovedUser(req) {
+  const m = String(req.get?.('authorization') || req.headers?.authorization || '').match(/^Bearer\s+(.+)$/i)
+  if (!m) throw Object.assign(new Error('ต้องเข้าสู่ระบบก่อนใช้งาน (ไม่มี token)'), { status: 401 })
+  let decoded
+  try {
+    decoded = await admin.auth().verifyIdToken(m[1].trim())
+  } catch {
+    throw Object.assign(new Error('Token ไม่ถูกต้องหรือหมดอายุ'), { status: 401 })
+  }
+  const snap = await firestore.collection('users').doc(decoded.uid).get()
+  if (!snap.exists || snap.data()?.status !== 'approved') throw Object.assign(new Error('บัญชีนี้ยังไม่ได้รับอนุมัติให้ใช้งาน'), { status: 403 })
+  return decoded
+}
+
 exports.parseSav = onRequest({ region: 'asia-southeast1', cors: true, timeoutSeconds: 60, memory: '512MiB' }, async (req, res) => {
   res.set('Content-Type', 'application/json; charset=utf-8')
   if (req.method !== 'POST') {
     res.status(405).send(JSON.stringify({ error: 'Method Not Allowed' }))
+    return
+  }
+  try {
+    await requireApprovedUser(req)
+  } catch (e) {
+    res.status(e.status || 401).send(JSON.stringify({ error: e.message }))
     return
   }
   try {

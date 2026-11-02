@@ -4,6 +4,7 @@ import { readFileSync, existsSync } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { createRequire } from 'node:module'
+import { createVerify } from 'node:crypto'
 const require = createRequire(import.meta.url)
 const execFileAsync = promisify(execFile)
 const { SavBufferReader } = require('sav-reader')
@@ -29,6 +30,95 @@ function loadEnvValue(name) {
   const re = new RegExp(`^${name}=(.+)$`, 'm')
   const m = env.match(re)
   return m ? m[1].trim().replace(/^['"]|['"]$/g, '') : ''
+}
+
+// ---------- Auth: ทุก endpoint (ยกเว้น /health และ Confirm ของ CI) ต้องมี Firebase ID token ของผู้ใช้ที่อนุมัติแล้ว ----------
+// ตรวจลายเซ็น RS256 กับใบรับรองสาธารณะของ Google (ไม่ต้องใช้ service account) แล้วอ่าน users/{uid}
+// ผ่าน Firestore REST ด้วย token ของผู้ใช้เอง (rules อนุญาตให้อ่านโปรไฟล์ตัวเอง) → ต้อง status == 'approved'
+// Auth/Firestore อยู่คนละ project กับ Hosting: Hosting = codeframe-dp · Auth/Firestore = codeframe-dbd8d (ดู src/lib/firebaseConfig.js)
+const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'codeframe-dbd8d'
+const FIRESTORE_DOCS = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents`
+const SECURETOKEN_CERTS_URL = 'https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com'
+// ปิดได้เฉพาะกรณีฉุกเฉิน/ทดสอบในเครื่อง: AI_RUNNER_REQUIRE_AUTH=0
+const REQUIRE_AUTH = process.env.AI_RUNNER_REQUIRE_AUTH !== '0'
+
+class HttpError extends Error {
+  constructor(status, message) { super(message); this.status = status }
+}
+
+let certCache = { expiresAt: 0, certs: null }
+async function getSecuretokenCerts() {
+  if (certCache.certs && Date.now() < certCache.expiresAt) return certCache.certs
+  const r = await fetch(SECURETOKEN_CERTS_URL)
+  if (!r.ok) throw new HttpError(503, `โหลดใบรับรอง Firebase ไม่สำเร็จ HTTP ${r.status}`)
+  const certs = await r.json()
+  const maxAge = Number((r.headers.get('cache-control') || '').match(/max-age=(\d+)/)?.[1] || 3600)
+  certCache = { certs, expiresAt: Date.now() + Math.min(maxAge, 6 * 3600) * 1000 }
+  return certs
+}
+
+const b64urlJson = (part) => JSON.parse(Buffer.from(part, 'base64url').toString('utf8'))
+
+async function verifyFirebaseIdToken(token) {
+  const parts = String(token || '').split('.')
+  if (parts.length !== 3) throw new HttpError(401, 'Token ไม่ถูกต้อง')
+  let header, payload
+  try { header = b64urlJson(parts[0]); payload = b64urlJson(parts[1]) } catch { throw new HttpError(401, 'Token ไม่ถูกต้อง') }
+  if (header.alg !== 'RS256' || !header.kid) throw new HttpError(401, 'Token ไม่ถูกต้อง')
+  const certs = await getSecuretokenCerts()
+  const cert = certs[header.kid]
+  if (!cert) throw new HttpError(401, 'Token หมดอายุหรือไม่ถูกต้อง — กรุณา Refresh แล้วลองใหม่')
+  const ok = createVerify('RSA-SHA256').update(`${parts[0]}.${parts[1]}`).verify(cert, Buffer.from(parts[2], 'base64url'))
+  if (!ok) throw new HttpError(401, 'Token ไม่ถูกต้อง')
+  const now = Math.floor(Date.now() / 1000)
+  if (payload.aud !== FIREBASE_PROJECT_ID || payload.iss !== `https://securetoken.google.com/${FIREBASE_PROJECT_ID}`) throw new HttpError(401, 'Token ไม่ใช่ของระบบนี้')
+  if (!payload.sub || typeof payload.sub !== 'string') throw new HttpError(401, 'Token ไม่ถูกต้อง')
+  if (!(payload.exp > now)) throw new HttpError(401, 'Token หมดอายุ — กรุณา Refresh แล้วลองใหม่')
+  if (payload.iat > now + 300 || (payload.auth_time && payload.auth_time > now + 300)) throw new HttpError(401, 'Token ไม่ถูกต้อง')
+  return payload
+}
+
+const approvedCache = new Map() // uid → expiresAt (เฉพาะคนที่อนุมัติแล้ว)
+async function assertApprovedUser(uid, idToken) {
+  const hit = approvedCache.get(uid)
+  if (hit && hit > Date.now()) return
+  const r = await fetch(`${FIRESTORE_DOCS}/users/${encodeURIComponent(uid)}`, { headers: { Authorization: `Bearer ${idToken}` } })
+  if (r.status === 403 || r.status === 404) throw new HttpError(403, 'บัญชีนี้ยังไม่ได้รับอนุมัติให้ใช้งาน')
+  if (!r.ok) throw new HttpError(503, `ตรวจสิทธิ์ผู้ใช้ไม่สำเร็จ HTTP ${r.status}`)
+  const data = await r.json().catch(() => ({}))
+  if (data?.fields?.status?.stringValue !== 'approved') throw new HttpError(403, 'บัญชีนี้ยังไม่ได้รับอนุมัติให้ใช้งาน')
+  approvedCache.set(uid, Date.now() + 5 * 60 * 1000)
+}
+
+async function requireApprovedUser(req) {
+  if (!REQUIRE_AUTH) return null
+  const m = String(req.headers?.authorization || '').match(/^Bearer\s+(.+)$/i)
+  if (!m) throw new HttpError(401, 'ต้องเข้าสู่ระบบก่อนใช้งาน (ไม่มี token)')
+  const payload = await verifyFirebaseIdToken(m[1].trim())
+  await assertApprovedUser(payload.sub, m[1].trim())
+  return payload
+}
+
+// Confirm ของ CI (ไม่ได้ล็อกอิน): ยืนยันด้วย review token ที่ยัง active และส่งเมลไปหา Edit ที่บันทึกไว้ในลิงก์เท่านั้น
+const confirmRate = new Map() // token → [timestamps]
+async function loadActiveReviewLink(reviewUrl) {
+  const token = String(reviewUrl || '').match(/^https:\/\/codeframe-dp\.web\.app\/#\/review\/([A-Za-z0-9_-]{8,200})$/)?.[1]
+  if (!token) throw new HttpError(400, 'Review link ไม่ถูกต้อง')
+  const r = await fetch(`${FIRESTORE_DOCS}/review_links/${encodeURIComponent(token)}`)
+  if (r.status === 403 || r.status === 404) throw new HttpError(403, 'ลิงก์ Review นี้ไม่ถูกต้องหรือถูกปิดแล้ว')
+  if (!r.ok) throw new HttpError(503, `ตรวจลิงก์ Review ไม่สำเร็จ HTTP ${r.status}`)
+  const doc = await r.json().catch(() => ({}))
+  const f = doc?.fields || {}
+  if (f.status?.stringValue !== 'active') throw new HttpError(403, 'ลิงก์ Review นี้ถูกปิดใช้งานแล้ว')
+  const editEmail = f.emailInvite?.mapValue?.fields?.editEmail?.stringValue || ''
+  return { token, editEmail }
+}
+function checkConfirmRate(token, limit = 5, windowMs = 10 * 60 * 1000) {
+  const now = Date.now()
+  const recent = (confirmRate.get(token) || []).filter((t) => now - t < windowMs)
+  if (recent.length >= limit) throw new HttpError(429, 'ส่งเมล Confirm ถี่เกินไป กรุณารอสักครู่')
+  recent.push(now)
+  confirmRate.set(token, recent)
 }
 
 function isEmail(v) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(v || '').trim()) }
@@ -362,15 +452,31 @@ function send(res, status, data, req = null) {
   res.end(body)
 }
 
-function readBody(req) {
+function readBody(req, limit = 10_000_000) {
   return new Promise((resolve, reject) => {
     let body = ''
+    let done = false
+    const fail = (err) => { if (!done) { done = true; reject(err) } }
     req.on('data', (chunk) => {
+      if (done) return
       body += chunk
-      if (body.length > 10_000_000) reject(new Error('Request too large'))
+      if (body.length > limit) {
+        fail(new HttpError(413, 'Request too large'))
+        req.destroy?.() // หยุดรับข้อมูลที่เหลือ ไม่บัฟเฟอร์ต่อ
+      }
     })
-    req.on('end', () => resolve(body ? JSON.parse(body) : {}))
-    req.on('error', reject)
+    req.on('end', () => {
+      if (done) return
+      try {
+        const parsed = body ? JSON.parse(body) : {}
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not an object')
+        done = true
+        resolve(parsed)
+      } catch {
+        fail(new HttpError(400, 'JSON ไม่ถูกต้อง'))
+      }
+    })
+    req.on('error', fail)
   })
 }
 function readRawBody(req, limit = 120_000_000) {
@@ -756,10 +862,22 @@ async function listOpenRouterModels() {
   return { models: (data?.data || []).map((m) => ({ id: m.id, name: m.name || m.id, free: isFree(m) })).filter((m) => m.id).sort((a, b) => a.id.localeCompare(b.id)) }
 }
 
+const errStatus = (e) => (Number.isInteger(e?.status) && e.status >= 400 && e.status < 600 ? e.status : 500)
+
 const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') return send(res, 204, {}, req)
   const url = new URL(req.url, `http://${req.headers.host}`)
-  if (req.method === 'GET' && url.pathname === '/health') return send(res, 200, { ok: true, provider: 'openrouter', model: DEFAULT_MODEL, keyConfigured: !!loadSecret() }, req)
+  if (req.method === 'GET' && url.pathname === '/health') return send(res, 200, { ok: true, provider: 'openrouter', model: DEFAULT_MODEL, keyConfigured: !!loadSecret(), authRequired: REQUIRE_AUTH }, req)
+  // Confirm ของ CI ใช้ review token แทนการล็อกอิน — endpoint อื่นทั้งหมดต้องเป็นผู้ใช้ที่อนุมัติแล้ว
+  if (url.pathname !== '/api/send-ci-confirm-email') {
+    try {
+      await requireApprovedUser(req)
+    } catch (e) {
+      const status = errStatus(e)
+      if (status >= 500) console.error(e)
+      return send(res, status === 500 ? 503 : status, { error: e.message || String(e) }, req)
+    }
+  }
   if (req.method === 'GET' && url.pathname === '/api/openrouter-models') {
     try { return send(res, 200, await listOpenRouterModels(), req) } catch (e) { return send(res, 500, { error: e.message || String(e) }, req) }
   }
@@ -770,7 +888,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, await parseSavBuffer(buf), req)
     } catch (e) {
       console.error(e)
-      return send(res, 500, { error: `อ่านไฟล์ .sav ไม่สำเร็จ: ${e.message || String(e)}` }, req)
+      return send(res, errStatus(e), { error: `อ่านไฟล์ .sav ไม่สำเร็จ: ${e?.message || String(e)}` }, req)
     }
   }
   if (req.method === 'POST' && url.pathname === '/api/send-ci-review-email') {
@@ -779,16 +897,22 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, await sendCiReviewEmail(body), req)
     } catch (e) {
       console.error(e)
-      return send(res, 500, { error: e.message || String(e) }, req)
+      return send(res, errStatus(e), { error: e.message || String(e) }, req)
     }
   }
   if (req.method === 'POST' && url.pathname === '/api/send-ci-confirm-email') {
     try {
       const body = await readBody(req)
-      return send(res, 200, await sendCiConfirmEmail(body), req)
+      const link = await loadActiveReviewLink(body.reviewUrl)
+      // ส่งได้เฉพาะ Edit email ที่บันทึกไว้ในลิงก์ — กันการใช้ endpoint นี้ส่งเมลหาใครก็ได้
+      if (!link.editEmail || String(body.editEmail || '').trim().toLowerCase() !== link.editEmail.trim().toLowerCase()) {
+        throw new HttpError(403, 'Send from Email ไม่ตรงกับที่บันทึกไว้ในลิงก์ Review')
+      }
+      checkConfirmRate(link.token)
+      return send(res, 200, await sendCiConfirmEmail({ ...body, editEmail: link.editEmail }), req)
     } catch (e) {
       console.error(e)
-      return send(res, 500, { error: e.message || String(e) }, req)
+      return send(res, errStatus(e), { error: e.message || String(e) }, req)
     }
   }
   if (req.method !== 'POST' || !ROUTES.has(url.pathname)) return send(res, 404, { error: 'Not found' }, req)
@@ -800,10 +924,10 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, result, req)
   } catch (e) {
     console.error(e)
-    return send(res, 500, { error: e.message || String(e) }, req)
+    return send(res, errStatus(e), { error: e.message || String(e) }, req)
   }
 })
 
 server.listen(PORT, '127.0.0.1', () => {
-  console.log(`OpenRouter AI runner listening on http://127.0.0.1:${PORT}`)
+  console.log(`OpenRouter AI runner listening on http://127.0.0.1:${PORT} (auth ${REQUIRE_AUTH ? 'required' : 'DISABLED'})`)
 })

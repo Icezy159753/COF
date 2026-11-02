@@ -1,12 +1,14 @@
 // ส่งไฟล์ SPSS .sav ไปให้ backend (/api/parse-sav) อ่าน metadata
 // คืน { byVar: { <varName>: { label, type, values:[{value,label}] } }, varCount }
+import { authHeaders } from './apiAuth.js'
+
 const AI_API_BASE = (import.meta.env.VITE_AI_API_BASE || '').replace(/\/$/, '')
 const apiUrl = (path) => `${AI_API_BASE}${path}`
 
 export async function parseSavCodebook(file) {
   const res = await fetch(apiUrl('/api/parse-sav'), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/octet-stream' },
+    headers: await authHeaders({ 'Content-Type': 'application/octet-stream' }),
     body: file, // ส่ง File เป็น binary ตรงๆ
   })
   if (!res.ok) {

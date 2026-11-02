@@ -9,6 +9,8 @@ export const DEFAULT_AI_CONFIG = {
   codexModel: '', // ว่าง = ใช้โมเดลเริ่มต้นของ Codex (เช่น gpt-5.5)
 }
 
+import { authHeaders } from './apiAuth.js'
+
 const AI_API_BASE = (import.meta.env.VITE_AI_API_BASE || '').replace(/\/$/, '')
 const ALLOW_DIRECT_OPENROUTER = import.meta.env.VITE_OPENROUTER_DIRECT_FALLBACK === '1'
 function apiUrl(path) {
@@ -18,7 +20,7 @@ function apiUrl(path) {
 // ดึงรายชื่อโมเดลทั้งหมดที่ OpenRouter รองรับ
 // ถ้ามี backend/runner ให้ผ่าน proxy; ถ้าเป็น Firebase Hosting static ให้ยิง OpenRouter public endpoint ตรง
 export async function fetchOpenRouterModels() {
-  const res = await fetch(apiUrl('/api/openrouter-models'))
+  const res = await fetch(apiUrl('/api/openrouter-models'), { headers: await authHeaders() })
   if (!res.ok) {
     let msg = `เซิร์ฟเวอร์ตอบกลับ HTTP ${res.status}`
     try {
@@ -93,7 +95,7 @@ export async function aiTestConnection(aiPayload) {
   }
   const res = await fetch(apiUrl('/api/ai-group'), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ codes: [{ text: 'ทดสอบการเชื่อมต่อ', count: 1 }], ai: aiPayload }),
   })
   if (!res.ok) {
@@ -273,7 +275,7 @@ async function postJson(url, body) {
   }
   const res = await fetch(apiUrl(url), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ ...body, ai }),
   })
   if (!res.ok) {
