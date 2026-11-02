@@ -203,6 +203,9 @@ function aiGroupPlugin() {
 }
 
 export default defineConfig({
+  define: {
+    __APP_BUILD_TIME__: JSON.stringify(new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok', hour12: false })),
+  },
   plugins: [react(), tailwindcss(), aiGroupPlugin()],
   server: {
     allowedHosts: true,

@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useEffect, useState } from 'react'
 import {
   browserLocalPersistence,
@@ -16,6 +17,12 @@ import { firebaseConfig } from './firebaseConfig.js'
 export const SUPERADMIN_EMAIL = 'songklod159@gmail.com'
 
 const AuthContext = createContext(null)
+
+export function isLocalUxPreview() {
+  if (typeof window === 'undefined') return false
+  const localHost = ['localhost', '127.0.0.1'].includes(window.location.hostname)
+  return localHost && (window.location.search.includes('ux-preview=1') || window.location.hash.includes('ux-preview=1'))
+}
 
 // สร้าง/อัปเดตเอกสารโปรไฟล์ผู้ใช้ใน users/{uid}
 async function ensureProfile(u) {
@@ -52,6 +59,14 @@ async function ensureProfile(u) {
 }
 
 export function AuthProvider({ children }) {
+  const previewMode = isLocalUxPreview()
+  const previewUser = {
+    uid: 'local-ux-preview',
+    email: 'js-ux-preview@local.test',
+    displayName: 'JS UX Preview',
+    photoURL: '',
+  }
+
   const [user, setUser] = useState(null)
   const [profile, setProfile] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -59,6 +74,7 @@ export function AuthProvider({ children }) {
   const [signingIn, setSigningIn] = useState(false)
 
   useEffect(() => {
+    if (previewMode) return undefined
     let unsubProfile = null
     let cancelled = false
     setPersistence(auth, browserLocalPersistence)
@@ -139,7 +155,7 @@ export function AuthProvider({ children }) {
       unsub()
       if (unsubProfile) unsubProfile()
     }
-  }, [])
+  }, [previewMode])
 
   async function signInWithGoogle() {
     setError('')
@@ -208,6 +224,31 @@ export function AuthProvider({ children }) {
     } catch {
       /* ignore */
     }
+  }
+
+  if (previewMode) {
+    return (
+      <AuthContext.Provider
+        value={{
+          user: previewUser,
+          profile: { uid: previewUser.uid, email: previewUser.email, displayName: previewUser.displayName, role: 'superadmin', status: 'approved', profileCompleted: true },
+          role: 'superadmin',
+          status: 'approved',
+          approved: true,
+          profileCompleted: true,
+          isSuperAdmin: true,
+          isAdmin: true,
+          canManage: true,
+          loading: false,
+          signingIn: false,
+          error: '',
+          signInWithGoogle: async () => {},
+          signOutUser: async () => {},
+        }}
+      >
+        {children}
+      </AuthContext.Provider>
+    )
   }
 
   const role = profile?.role || null

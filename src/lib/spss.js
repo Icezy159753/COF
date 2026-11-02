@@ -1,7 +1,10 @@
 // ส่งไฟล์ SPSS .sav ไปให้ backend (/api/parse-sav) อ่าน metadata
 // คืน { byVar: { <varName>: { label, type, values:[{value,label}] } }, varCount }
+const AI_API_BASE = (import.meta.env.VITE_AI_API_BASE || '').replace(/\/$/, '')
+const apiUrl = (path) => `${AI_API_BASE}${path}`
+
 export async function parseSavCodebook(file) {
-  const res = await fetch('/api/parse-sav', {
+  const res = await fetch(apiUrl('/api/parse-sav'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/octet-stream' },
     body: file, // ส่ง File เป็น binary ตรงๆ
@@ -15,7 +18,11 @@ export async function parseSavCodebook(file) {
     }
     throw new Error(msg)
   }
-  const data = await res.json()
+  const text = await res.text()
+  if (/^\s*</.test(text)) {
+    throw new Error('เซิร์ฟเวอร์ตอบกลับเป็น HTML ไม่ใช่ JSON — endpoint /api/parse-sav ยังไม่พร้อมบนเว็บสด')
+  }
+  const data = JSON.parse(text)
   // เก็บเฉพาะที่จำเป็น: ชื่อข้อ → { label (โจทย์), values (Value Label), type (string/numeric) }
   //   type ใช้รู้ว่าคอลัมน์ถัดไปเป็น "ช่องระบุ" (String) แม้จะว่าง
   const byVar = {}

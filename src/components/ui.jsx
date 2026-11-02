@@ -10,37 +10,46 @@ export function Toast({ toast, onClose }) {
 
   if (!toast) return null
   const styles = {
-    success: { icon: CheckCircle2, accent: 'text-emerald-500', bar: 'from-emerald-400 to-emerald-500' },
-    info: { icon: Info, accent: 'text-indigo-500', bar: 'from-indigo-400 to-indigo-500' },
-    warning: { icon: AlertTriangle, accent: 'text-amber-500', bar: 'from-amber-400 to-amber-500' },
+    success: { icon: CheckCircle2, accent: 'text-emerald-600', bg: 'bg-emerald-50', border: 'border-emerald-200', button: 'bg-emerald-600 hover:bg-emerald-700' },
+    info: { icon: Info, accent: 'text-indigo-600', bg: 'bg-indigo-50', border: 'border-indigo-200', button: 'bg-indigo-600 hover:bg-indigo-700' },
+    warning: { icon: AlertTriangle, accent: 'text-amber-600', bg: 'bg-amber-50', border: 'border-amber-200', button: 'bg-amber-600 hover:bg-amber-700' },
   }
   const s = styles[toast.type ?? 'info']
   const Icon = s.icon
   return (
-    <div className="pointer-events-none fixed inset-0 z-[70] flex items-start justify-center pt-[16vh]">
-      <div className="pointer-events-auto w-[27rem] max-w-[92vw] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl [animation:cs-pop_.28s_ease-out]">
-        <div className={`h-1.5 w-full bg-gradient-to-r ${s.bar}`} />
-        <div className="flex items-start gap-3.5 px-5 py-4">
-          <span className="relative flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-md shadow-indigo-200">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="3" y="3" width="7" height="7" rx="1" />
-              <rect x="14" y="3" width="7" height="7" rx="1" />
-              <rect x="14" y="14" width="7" height="7" rx="1" />
-              <rect x="3" y="14" width="7" height="7" rx="1" />
-            </svg>
-            <span className="absolute -bottom-1.5 -right-1.5 flex h-6 w-6 items-center justify-center rounded-full border-2 border-white bg-white shadow">
-              <Icon size={16} className={s.accent} />
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/20 p-4 backdrop-blur-[2px]">
+      <div className="w-[24rem] max-w-[92vw] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl [animation:cs-pop_.22s_ease-out]">
+        <div className="flex items-start justify-between border-b border-slate-100 px-4 py-3">
+          <div className="flex items-center gap-2">
+            <span className="grid h-8 w-8 place-items-center rounded-lg bg-gradient-to-br from-indigo-600 to-violet-600 text-white shadow-sm shadow-indigo-200">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="3" width="7" height="7" rx="1" />
+                <rect x="14" y="3" width="7" height="7" rx="1" />
+                <rect x="14" y="14" width="7" height="7" rx="1" />
+                <rect x="3" y="14" width="7" height="7" rx="1" />
+              </svg>
             </span>
-          </span>
-          <div className="min-w-0 flex-1 pt-0.5">
-            <p className="text-[11px] font-bold tracking-tight text-slate-400">
-              Codeframe <span className="text-indigo-500">Studio</span>
+            <p className="text-xs font-black tracking-tight text-slate-500">
+              Codeframe <span className="text-indigo-600">Studio</span>
             </p>
-            {toast.title && <p className="text-sm font-bold text-slate-900">{toast.title}</p>}
-            {toast.message && <p className="mt-0.5 text-xs leading-relaxed text-slate-500">{toast.message}</p>}
           </div>
-          <button onClick={onClose} className="-mr-1 -mt-1 shrink-0 cursor-pointer rounded-lg p-1 text-slate-300 hover:bg-slate-100 hover:text-slate-600">
+          <button onClick={onClose} className="cursor-pointer rounded-md p-1 text-slate-300 hover:bg-slate-100 hover:text-slate-600">
             <X size={16} />
+          </button>
+        </div>
+
+        <div className="px-5 py-5 text-center">
+          <div className={`mx-auto mb-3 grid h-12 w-12 place-items-center rounded-xl border ${s.border} ${s.bg}`}>
+            <Icon size={26} className={s.accent} />
+          </div>
+          {toast.title && <p className="text-base font-black text-slate-900">{toast.title}</p>}
+          {toast.message && <p className="mx-auto mt-1 max-w-[19rem] text-sm leading-relaxed text-slate-500">{toast.message}</p>}
+          <button
+            type="button"
+            onClick={onClose}
+            className={`mt-5 inline-flex min-w-24 items-center justify-center rounded-lg px-4 py-2 text-sm font-bold text-white shadow-sm ${s.button}`}
+          >
+            OK
           </button>
         </div>
       </div>
@@ -126,13 +135,13 @@ export function NewRowsBadge({ count, className = '' }) {
 export function Modal({ open, onClose, title, children, wide = false }) {
   if (!open) return null
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-[160] flex items-center justify-center overflow-y-auto px-4 py-6">
       <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={onClose} />
       <div
-        className={`relative max-h-[90vh] w-full ${wide ? 'max-w-3xl' : 'max-w-lg'} overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl`}
+        className={`relative max-h-[calc(100vh-3rem)] w-full ${wide ? 'max-w-4xl' : 'max-w-lg'} overflow-y-auto rounded-2xl bg-white p-4 shadow-2xl xl:p-6`}
       >
-        <div className="mb-4 flex items-start justify-between">
-          <h3 className="text-lg font-bold text-slate-900">{title}</h3>
+        <div className="mb-4 flex min-w-0 items-start justify-between gap-3">
+          <h3 className="min-w-0 break-words text-lg font-bold text-slate-900">{title}</h3>
           <button
             onClick={onClose}
             className="cursor-pointer rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"

@@ -1,5 +1,15 @@
 {
   "projects": {
     "default": "codeframe-dp"
-  }
+  },
+  "targets": {
+    "codeframe-dp": {
+      "hosting": {
+        "codeframe": [
+          "codeframe-dp"
+        ]
+      }
+    }
+  },
+  "etags": {}
 }

@@ -9,6 +9,12 @@ service cloud.firestore {
       return signedIn() && request.auth.uid == uid;
     }
 
+    function isBootstrapSuperAdminEmail() {
+      return signedIn()
+        && request.auth.token.email is string
+        && request.auth.token.email.lower() == 'songklod159@gmail.com';
+    }
+
     function role() {
       return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid))
         ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
@@ -29,10 +35,112 @@ service cloud.firestore {
       return approved() && (role() == 'admin' || role() == 'superadmin');
     }
 
+    function publicReviewCodeframe() {
+      return resource.data.clientReviewEnabled == true;
+    }
+
+    function activeReviewToken(token) {
+      return token is string
+        && token.size() > 10
+        && exists(/databases/$(database)/documents/review_links/$(token))
+        && get(/databases/$(database)/documents/review_links/$(token)).data.status == 'active';
+    }
+
+    function tokenOwnsCodeframe(token, codeframeId) {
+      return activeReviewToken(token)
+        && get(/databases/$(database)/documents/review_links/$(token)).data.codeframeId == codeframeId;
+    }
+
+    function safePublicCodeframeReviewUpdate(docId) {
+      return publicReviewCodeframe()
+        && request.resource.data.clientReviewEnabled == true
+        && request.resource.data.projectId == resource.data.projectId
+        && request.resource.data.box == resource.data.box
+        && tokenOwnsCodeframe(request.resource.data.reviewWriteToken, docId)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'sheetsJson',
+          'reviewFreqByCode',
+          'reviewSheetStatusMap',
+          'reviewUpdatedAt',
+          'reviewWriteToken'
+        ]);
+    }
+
+    function safePublicReviewLinkUpdate(token) {
+      return activeReviewToken(token)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'confirmedAt',
+          'confirmedBy',
+          'confirmEmailTo',
+          'confirmNote',
+          'confirmStatus',
+          'confirmEmailSentAt',
+          'confirmEmailId',
+          'confirmError'
+        ]);
+    }
+
+    function safePublicReviewAuditCreate() {
+      return request.resource.data.token is string
+        && request.resource.data.codeframeId is string
+        && tokenOwnsCodeframe(request.resource.data.token, request.resource.data.codeframeId)
+        && request.resource.data.action in [
+          'edit_code_cell',
+          'rename_net',
+          'rename_code',
+          'move_code_top',
+          'move_code_bottom',
+          'move_code_up',
+          'move_code_down',
+          'merge_code',
+          'move_code',
+          'export_codeframe',
+          'code_comment',
+          'review_confirm'
+        ];
+    }
+
+    function safeSelfCreate(uid) {
+      return isSelf(uid)
+        && request.resource.data.uid == uid
+        && request.resource.data.email == request.auth.token.email
+        && (
+          (
+            isBootstrapSuperAdminEmail()
+            && request.resource.data.role == 'superadmin'
+            && request.resource.data.status == 'approved'
+          )
+          || (
+            !isBootstrapSuperAdminEmail()
+            && request.resource.data.role == 'member'
+            && request.resource.data.status == 'pending'
+          )
+        );
+    }
+
+    function safeSelfUpdate(uid) {
+      return isSelf(uid)
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.email == request.auth.token.email
+        && (
+          (
+            isBootstrapSuperAdminEmail()
+            && request.resource.data.role == 'superadmin'
+            && request.resource.data.status == 'approved'
+          )
+          || (
+            !isBootstrapSuperAdminEmail()
+            && request.resource.data.role == resource.data.role
+            && request.resource.data.status == resource.data.status
+          )
+        );
+    }
+
     match /users/{uid} {
+      // ผู้ใช้ต้องอ่านโปรไฟล์ตัวเองได้เสมอ ไม่งั้น login bootstrap/หน้า pending จะพัง
       allow read: if isSelf(uid) || admin();
-      allow create: if isSelf(uid);
-      allow update: if isSelf(uid) || admin();
+      allow create: if safeSelfCreate(uid) || admin();
+      allow update: if safeSelfUpdate(uid) || admin();
       allow delete: if admin();
     }
 
@@ -41,9 +149,31 @@ service cloud.firestore {
       allow write: if admin();
     }
 
+    match /review_links/{token} {
+      allow read: if resource.data.status == 'active' || approved();
+      allow create, delete: if approved();
+      allow update: if approved() || safePublicReviewLinkUpdate(token);
+    }
+
+    match /review_audit/{auditId} {
+      allow create: if safePublicReviewAuditCreate() || approved();
+      allow read: if approved();
+      // ฝั่ง Edit ใช้ติ๊ก Done/Undo หลังแก้ตามคอมเมนต์แล้ว; public CI ยัง create ได้เท่านั้น
+      allow update: if approved()
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['status', 'done', 'resolvedAt', 'resolvedBy', 'updatedAt']);
+      allow delete: if admin();
+    }
+
+    match /codeframes/{docId} {
+      allow read: if approved() || publicReviewCodeframe();
+      allow create, delete: if approved();
+      allow update: if approved() || safePublicCodeframeReviewUpdate(docId);
+    }
+
     match /{collection}/{docId} {
       allow read, write: if approved()
-        && collection in ['projects', 'codeframes', 'rawdata_chunks', 'codebook_chunks', 'audit_logs', 'versions'];
+        && collection in ['projects', 'rawdata_chunks', 'codebook_chunks', 'audit_logs', 'versions'];
     }
   }
 }

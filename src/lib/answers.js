@@ -1,5 +1,5 @@
 // ดึงคำตอบ (ไม่ซ้ำ) ของข้อที่เลือกจาก Rawdata
-// คืนค่า [{ key, text, count, questions: [label] }]
+// คืนค่า [{ key, text, count, questions: [label], sourceCounts: { [label]: count } }]
 export function uniqueAnswers(rawdata, questionIds) {
   if (!rawdata) return []
   const byId = new Map(rawdata.questions.map((q) => [q.id, q]))
@@ -14,15 +14,16 @@ export function uniqueAnswers(rawdata, questionIds) {
         const text = String(row[col] ?? '').trim()
         if (!text) continue
         const key = text
-        if (!map.has(key)) map.set(key, { key, text, count: 0, questions: new Set() })
+        if (!map.has(key)) map.set(key, { key, text, count: 0, questions: new Set(), sourceCounts: new Map() })
         const item = map.get(key)
         item.count += 1
         item.questions.add(q.label)
+        item.sourceCounts.set(q.label, (item.sourceCounts.get(q.label) ?? 0) + 1)
       }
     }
   }
   return [...map.values()]
-    .map((a) => ({ ...a, questions: [...a.questions] }))
+    .map((a) => ({ ...a, questions: [...a.questions], sourceCounts: Object.fromEntries(a.sourceCounts) }))
     .sort((a, b) => b.count - a.count || a.text.localeCompare(b.text, 'th'))
 }
 
@@ -30,7 +31,7 @@ export function uniqueAnswers(rawdata, questionIds) {
 function normalize(text) {
   return String(text || '')
     .toLowerCase()
-    .replace(/[\s.,!?;:"'`()\[\]{}…\-—–/\\]+/g, '')
+    .replace(/[\s.,!?;:"'`()[\]{}…\-—–/\\]+/g, '')
 }
 
 function bigrams(text) {
@@ -201,7 +202,7 @@ export function buildCodeframeAdvanced(
   makeId,
   { threshold = 0.5, multiTopic = false, groupIntoNets = false, netThreshold = 0.18 } = {},
 ) {
-  // 1) สร้างหน่วยที่จะ cluster — ทั้งคำตอบ หรือประโยคย่อย (พก​ answerKey ไว้ map กลับ)
+  // 1) สร้างหน่วยที่จะ cluster — ทั้งคำตอบ หรือประโยคย่อย (พก answerKey ไว้ map กลับ)
   const units = []
   for (const a of answers) {
     const pieces = multiTopic ? splitTopics(a.text) : [a.text]

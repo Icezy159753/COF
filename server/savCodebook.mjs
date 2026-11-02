@@ -14,15 +14,16 @@ export async function parseSavBuffer(buffer) {
   for (const v of sav.meta.sysvars ?? []) {
     // ข้าม sysvar ภายในที่เป็น "ส่วนต่อของ string ยาว" (ไม่ใช่ตัวแปรจริง)
     if (v.__is_child_string_var) continue
-    let values = []
-    try {
-      const entries = sav.meta.getValueLabels(v.name) ?? []
-      values = entries
-        .map((e) => ({ value: e.val, label: String(e.label ?? '').trim() }))
-        .filter((e) => e.label !== '')
-    } catch {
-      values = []
-    }
+    const values = (() => {
+      try {
+        const entries = sav.meta.getValueLabels(v.name) ?? []
+        return entries
+          .map((e) => ({ value: e.val, label: String(e.label ?? '').trim() }))
+          .filter((e) => e.label !== '')
+      } catch {
+        return []
+      }
+    })()
     byVar[v.name] = {
       label: String(v.label ?? '').trim(),
       type: v.type === 1 ? 'string' : 'numeric',

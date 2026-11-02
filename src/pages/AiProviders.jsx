@@ -13,6 +13,13 @@ const CLAUDE_MODELS = [
 
 // โมเดลยอดนิยม (ใช้เป็นตัวเลือกเริ่มต้นก่อนกด "โหลดรายชื่อ" — พิมพ์เองได้ทุกรุ่น)
 const OPENROUTER_FALLBACK = [
+  'qwen/qwen3-235b-a22b-2507',
+  'deepseek/deepseek-chat-v3.1',
+  'mistralai/mistral-small-3.2-24b-instruct',
+  'google/gemini-2.5-flash-lite',
+  'qwen/qwen3-next-80b-a3b-instruct:free',
+  'meta-llama/llama-3.3-70b-instruct:free',
+  'google/gemma-4-31b-it:free',
   'anthropic/claude-3.5-sonnet',
   'anthropic/claude-3.5-haiku',
   'openai/gpt-4o',
@@ -50,6 +57,38 @@ function recommendFree(models) {
     if (!picked.includes(m.id)) picked.push(m.id)
   }
   return picked
+}
+
+function ProviderCard({ id, name, desc, badge, active, onSelect }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(id)}
+      className={`flex-1 rounded-2xl border-2 p-4 text-left transition ${
+        active
+          ? 'border-indigo-500 bg-indigo-50/60 shadow-sm'
+          : 'border-slate-200 bg-white hover:border-slate-300'
+      }`}
+    >
+      <div className="flex items-center gap-2">
+        <span
+          className={`flex h-9 w-9 items-center justify-center rounded-xl text-white ${
+            active ? 'bg-gradient-to-br from-indigo-500 to-violet-600' : 'bg-slate-300'
+          }`}
+        >
+          <Sparkles size={17} />
+        </span>
+        <span className="font-bold text-slate-800">{name}</span>
+        {badge ? (
+          <span className="ml-auto rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
+            {badge}
+          </span>
+        ) : null}
+        {active ? <Check size={18} className="ml-auto text-indigo-600" /> : null}
+      </div>
+      <p className="mt-2 text-[12px] leading-relaxed text-slate-500">{desc}</p>
+    </button>
+  )
 }
 
 export default function AiProviders() {
@@ -110,43 +149,12 @@ export default function AiProviders() {
     setTest('loading')
     try {
       await aiTestConnection(toAiPayload(form))
-      setTest({ ok: true, msg: 'เชื่อมต่อสำเร็จ โมเดลตอบกลับปกติ' })
+      setAiConfig(form)
+      setSaved(true)
+      setTest({ ok: true, msg: 'เชื่อมต่อสำเร็จ โมเดลตอบกลับปกติ และบันทึกเป็นค่ากลางแล้ว' })
     } catch (e) {
       setTest({ ok: false, msg: e.message || 'เชื่อมต่อไม่สำเร็จ' })
     }
-  }
-
-  const Provider = ({ id, name, desc, badge }) => {
-    const active = form.provider === id
-    return (
-      <button
-        type="button"
-        onClick={() => set({ provider: id })}
-        className={`flex-1 rounded-2xl border-2 p-4 text-left transition ${
-          active
-            ? 'border-indigo-500 bg-indigo-50/60 shadow-sm'
-            : 'border-slate-200 bg-white hover:border-slate-300'
-        }`}
-      >
-        <div className="flex items-center gap-2">
-          <span
-            className={`flex h-9 w-9 items-center justify-center rounded-xl text-white ${
-              active ? 'bg-gradient-to-br from-indigo-500 to-violet-600' : 'bg-slate-300'
-            }`}
-          >
-            <Sparkles size={17} />
-          </span>
-          <span className="font-bold text-slate-800">{name}</span>
-          {badge ? (
-            <span className="ml-auto rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
-              {badge}
-            </span>
-          ) : null}
-          {active ? <Check size={18} className="ml-auto text-indigo-600" /> : null}
-        </div>
-        <p className="mt-2 text-[12px] leading-relaxed text-slate-500">{desc}</p>
-      </button>
-    )
   }
 
   return (
@@ -165,22 +173,28 @@ export default function AiProviders() {
 
       {/* เลือก Provider */}
       <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <Provider
+        <ProviderCard
           id="claude"
           name="Claude (Subscription)"
           desc="ใช้ Claude subscription/CLI ที่ Admin หรือ SuperAdmin ตั้งไว้บน runner กลาง แล้วทุก user ใช้งาน AI ผ่านค่านี้"
           badge="Global"
+          active={form.provider === 'claude'}
+          onSelect={(id) => set({ provider: id })}
         />
-        <Provider
+        <ProviderCard
           id="codex"
           name="Codex CLI (OpenAI)"
           desc="ใช้ Codex CLI / ChatGPT subscription ที่ Admin หรือ SuperAdmin login ไว้บน runner กลาง แล้วทุก user ใช้งานร่วมกัน"
           badge="Global"
+          active={form.provider === 'codex'}
+          onSelect={(id) => set({ provider: id })}
         />
-        <Provider
+        <ProviderCard
           id="openrouter"
           name="OpenRouter"
           desc="เรียกผ่าน OpenRouter API เลือกได้หลายโมเดล (Claude, GPT, Gemini, Llama ฯลฯ) — ต้องมี API key"
+          active={form.provider === 'openrouter'}
+          onSelect={(id) => set({ provider: id })}
         />
       </div>
 

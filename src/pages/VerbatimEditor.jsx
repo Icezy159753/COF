@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/set-state-in-effect, react-hooks/exhaustive-deps */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
@@ -52,7 +53,6 @@ export default function VerbatimEditor() {
         questionIds: detectTextQuestions(rawdata),
       })
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rawdata, project?.id])
 
   // หมายเหตุ: ไม่ auto-mark seen ที่นี่ — ให้ผู้ใช้เห็นแถวใหม่ (ไฮไลต์) ก่อน
@@ -79,7 +79,6 @@ export default function VerbatimEditor() {
     const idx = rowsAll.map((row, i) => [row, i])
     if (!q) return idx
     return idx.filter(([row]) => displayCols.some((dc) => cellValue(row, dc).toLowerCase().includes(q)))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rowsAll, query, cfg?.sbjNumId, cfg?.questionIds, cfg?.refQuestionIds])
 
   // ---------- บันทึก (debounce) ----------

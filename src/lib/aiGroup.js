@@ -2,14 +2,21 @@
 export const AI_PROVIDERS = ['claude', 'openrouter', 'codex']
 
 export const DEFAULT_AI_CONFIG = {
-  provider: 'claude', // 'claude' | 'openrouter' | 'codex'
+  provider: 'openrouter', // 'claude' | 'openrouter' | 'codex'
   claudeModel: 'sonnet', // alias ของ Claude CLI: 'sonnet' | 'haiku' | 'opus'
   openrouterApiKey: '',
-  openrouterModel: 'anthropic/claude-3.5-sonnet',
+  openrouterModel: 'qwen/qwen3-235b-a22b-2507',
   codexModel: '', // ว่าง = ใช้โมเดลเริ่มต้นของ Codex (เช่น gpt-5.5)
 }
 
-// ดึงรายชื่อโมเดลทั้งหมดที่ OpenRouter รองรับ (ผ่าน proxy ของ server)
+const AI_API_BASE = (import.meta.env.VITE_AI_API_BASE || '').replace(/\/$/, '')
+const ALLOW_DIRECT_OPENROUTER = import.meta.env.VITE_OPENROUTER_DIRECT_FALLBACK === '1'
+function apiUrl(path) {
+  return `${AI_API_BASE}${path}`
+}
+
+// ดึงรายชื่อโมเดลทั้งหมดที่ OpenRouter รองรับ
+// ถ้ามี backend/runner ให้ผ่าน proxy; ถ้าเป็น Firebase Hosting static ให้ยิง OpenRouter public endpoint ตรง
 export async function fetchOpenRouterModels() {
   const res = await fetch(apiUrl('/api/openrouter-models'))
   if (!res.ok) {
@@ -28,7 +35,7 @@ export async function fetchOpenRouterModels() {
 export function toAiPayload(cfg) {
   const c = { ...DEFAULT_AI_CONFIG, ...(cfg || {}) }
   if (c.provider === 'openrouter') {
-    return { provider: 'openrouter', model: c.openrouterModel, apiKey: c.openrouterApiKey }
+    return { provider: 'openrouter', model: c.openrouterModel, ...(ALLOW_DIRECT_OPENROUTER ? { apiKey: c.openrouterApiKey } : {}) }
   }
   if (c.provider === 'codex') {
     return { provider: 'codex', model: c.codexModel || undefined }
@@ -40,11 +47,6 @@ export function toAiPayload(cfg) {
 let activeAiPayload = toAiPayload(DEFAULT_AI_CONFIG)
 export function setActiveAiPayload(payload) {
   activeAiPayload = payload || toAiPayload(DEFAULT_AI_CONFIG)
-}
-
-const AI_API_BASE = (import.meta.env.VITE_AI_API_BASE || '').replace(/\/$/, '')
-function apiUrl(path) {
-  return `${AI_API_BASE}${path}`
 }
 
 // เรียก backend (/api/ai-group) ที่สั่ง AI ช่วยจัดกลุ่มรหัสคำตอบเป็น Net
@@ -86,6 +88,9 @@ export async function aiGroupCE(codes, verbatims) {
 
 // ทดสอบการเชื่อมต่อ provider/model ที่ระบุ (เรียกโมเดลจริง 1 ครั้งด้วย dummy เล็ก ๆ)
 export async function aiTestConnection(aiPayload) {
+  if (ALLOW_DIRECT_OPENROUTER && !AI_API_BASE && aiPayload?.provider === 'openrouter') {
+    return runOpenRouterDirect('/api/ai-group', { codes: [{ text: 'ทดสอบการเชื่อมต่อ', count: 1 }] }, aiPayload)
+  }
   const res = await fetch(apiUrl('/api/ai-group'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -103,11 +108,173 @@ export async function aiTestConnection(aiPayload) {
   return res.json()
 }
 
+
+function extractJson(text) {
+  if (!text) throw new Error('empty model output')
+  const start = text.indexOf('{')
+  const end = text.lastIndexOf('}')
+  if (start === -1 || end === -1 || end < start) throw new Error('no JSON object in model output')
+  return JSON.parse(text.slice(start, end + 1))
+}
+
+async function callOpenRouterDirect() {
+  throw new Error('OpenRouter direct mode is disabled; backend AI runner is required')
+}
+
+function buildGroupPrompt(codes) {
+  const lines = codes.map((c, i) => `${i} (x${c.count ?? 0}) ${c.text}`)
+  return [
+    'You are an expert at coding open-ended (OE) survey responses in Thai.',
+    'Group these answer codes into Nets by MEANING — not spelling.',
+    'Every index must appear in exactly one net. Net names must be concise Thai labels.',
+    'Return ONLY JSON: {"nets":[{"name":"<thai theme>","codeIndexes":[<indexes>]}]}',
+    '', 'Codes:', ...lines,
+  ].join('\n')
+}
+
+function normalizeGrouping(grouping, codeCount) {
+  const seen = new Set()
+  const nets = []
+  for (const net of grouping?.nets ?? []) {
+    const idxs = (net.codeIndexes ?? [])
+      .map((n) => Number(n))
+      .filter((n) => Number.isInteger(n) && n >= 0 && n < codeCount && !seen.has(n))
+    idxs.forEach((n) => seen.add(n))
+    if (idxs.length) nets.push({ name: String(net.name || 'กลุ่ม').trim(), codeIndexes: idxs })
+  }
+  const leftover = []
+  for (let i = 0; i < codeCount; i++) if (!seen.has(i)) leftover.push(i)
+  if (leftover.length) nets.push({ name: 'อื่น ๆ', codeIndexes: leftover })
+  return { nets }
+}
+
+function buildCodingPrompt(verbatims) {
+  const lines = verbatims.map((v, i) => `${i} (x${v.count ?? 0}) ${v.text}`)
+  return [
+    'You are an expert at coding Thai open-ended survey responses.',
+    'Build a codeframe and assign each verbatim to one or more codes. Split compound answers into all applicable reasons.',
+    'Return ONLY JSON: {"codes":[{"label":"<thai code text>","net":"<thai net name>"}],"assign":[[<codeIndex>,...]]}',
+    '', 'Verbatims:', ...lines,
+  ].join('\n')
+}
+
+function normalizeCoding(parsed, verbatimCount) {
+  const codes = (Array.isArray(parsed?.codes) ? parsed.codes : [])
+    .map((c) => ({ label: String(c?.label ?? c?.text ?? '').trim(), net: String(c?.net ?? c?.netName ?? 'อื่น ๆ').trim() || 'อื่น ๆ' }))
+    .filter((c) => c.label)
+  const assign = []
+  for (let i = 0; i < verbatimCount; i++) {
+    const entry = parsed?.assign?.[i]
+    const idxs = (Array.isArray(entry) ? entry : entry == null ? [] : [entry])
+      .map((n) => Number(n))
+      .filter((n) => Number.isInteger(n) && n >= 0 && n < codes.length)
+    assign.push([...new Set(idxs)])
+  }
+  return { codes, assign }
+}
+
+function buildAssignPrompt(codes, verbatims) {
+  const codeLines = codes.map((c) => `${c.i}: ${c.label}`)
+  const vLines = verbatims.map((v) => `${v.i} (x${v.count ?? 0}) ${v.text}`)
+  return [
+    'You are an expert at coding Thai open-ended "other, specify" survey responses.',
+    'For each verbatim, choose the SINGLE existing code index whose meaning matches best. If none fits, output -1.',
+    'Return ONLY JSON: {"assign":[<codeIndex or -1>, ...]}',
+    '', 'Existing codes:', ...codeLines, '', 'Verbatims:', ...vLines,
+  ].join('\n')
+}
+
+function normalizeAssign(parsed, codeCount, verbatimCount) {
+  const raw = Array.isArray(parsed?.assign) ? parsed.assign : []
+  return { assign: Array.from({ length: verbatimCount }, (_, i) => {
+    const n = Number(raw[i])
+    return Number.isInteger(n) && n >= 0 && n < codeCount ? n : -1
+  }) }
+}
+
+function buildGroupCEPrompt(codes, verbatims) {
+  const codeLines = codes.map((c) => `${c.i}: ${c.label}`)
+  const vLines = verbatims.map((v) => `${v.i} (x${v.count ?? 0}) ${v.text}`)
+  return [
+    'You are an expert at coding Thai open-ended "other, specify" survey responses.',
+    'There is an existing codeframe. For each verbatim:',
+    '- If meaning matches an existing code, output that code INDEX number.',
+    '- If no existing code fits, create a new concise Thai code label string.',
+    'Use the SAME new label string for verbatims that mean the same thing.',
+    'Return ONLY JSON: {"assign":[<index number or "new label">, ...]}',
+    '', 'Existing codes:', ...codeLines, '', 'Verbatims:', ...vLines,
+  ].join('\n')
+}
+
+function normalizeGroupCE(parsed, codeCount, verbatimCount) {
+  const raw = Array.isArray(parsed?.assign) ? parsed.assign : []
+  const assign = []
+  for (let i = 0; i < verbatimCount; i++) {
+    const v = raw[i]
+    if (typeof v === 'number' && Number.isInteger(v) && v >= 0 && v < codeCount) assign.push({ existing: v })
+    else if (typeof v === 'string' && v.trim()) assign.push({ neo: v.trim() })
+    else assign.push(null)
+  }
+  return { assign }
+}
+
+function buildSpellcheckPrompt(items) {
+  const lines = items.map((it) => `${it.i}\t${it.text}`)
+  return [
+    'You are a meticulous Thai proofreader. Fix spelling/spacing/grammar without changing meaning.',
+    'Omit lines already correct. Return ONLY JSON: {"fixes":[{"i":<index>,"fixed":"<corrected thai text>","reason":"<short thai note>"}]}',
+    '', 'Lines:', ...lines,
+  ].join('\n')
+}
+
+function normalizeSpellcheck(parsed, validIndexes) {
+  const fixes = []
+  for (const f of parsed?.fixes ?? []) {
+    const i = Number(f?.i)
+    const fixed = String(f?.fixed ?? '').trim()
+    if (Number.isInteger(i) && validIndexes.has(i) && fixed) fixes.push({ i, fixed, reason: String(f?.reason ?? '').trim() })
+  }
+  return { fixes }
+}
+
+async function runOpenRouterDirect(url, body, ai) {
+  if (url === '/api/ai-group') {
+    const parsed = extractJson(await callOpenRouterDirect(buildGroupPrompt(body.codes ?? []), ai))
+    return normalizeGrouping(parsed, (body.codes ?? []).length)
+  }
+  if (url === '/api/ai-code') {
+    const parsed = extractJson(await callOpenRouterDirect(buildCodingPrompt(body.verbatims ?? []), ai))
+    return normalizeCoding(parsed, (body.verbatims ?? []).length)
+  }
+  if (url === '/api/ai-review') {
+    const parsed = extractJson(await callOpenRouterDirect(buildCodingPrompt(body.verbatims ?? []), ai))
+    return normalizeCoding(parsed, (body.verbatims ?? []).length)
+  }
+  if (url === '/api/ai-assign') {
+    const parsed = extractJson(await callOpenRouterDirect(buildAssignPrompt(body.codes ?? [], body.verbatims ?? []), ai))
+    return normalizeAssign(parsed, (body.codes ?? []).length, (body.verbatims ?? []).length)
+  }
+  if (url === '/api/ai-group-ce') {
+    const parsed = extractJson(await callOpenRouterDirect(buildGroupCEPrompt(body.codes ?? [], body.verbatims ?? []), ai))
+    return normalizeGroupCE(parsed, (body.codes ?? []).length, (body.verbatims ?? []).length)
+  }
+  if (url === '/api/ai-spellcheck') {
+    const items = body.items ?? []
+    const parsed = extractJson(await callOpenRouterDirect(buildSpellcheckPrompt(items), ai))
+    return normalizeSpellcheck(parsed, new Set(items.map((it) => Number(it.i))))
+  }
+  throw new Error(`ยังไม่รองรับ OpenRouter direct สำหรับ ${url}`)
+}
+
 async function postJson(url, body) {
+  const ai = activeAiPayload
+  if (ALLOW_DIRECT_OPENROUTER && !AI_API_BASE && ai?.provider === 'openrouter') {
+    return runOpenRouterDirect(url, body, ai)
+  }
   const res = await fetch(apiUrl(url), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...body, ai: activeAiPayload }),
+    body: JSON.stringify({ ...body, ai }),
   })
   if (!res.ok) {
     let msg = `เซิร์ฟเวอร์ตอบกลับ HTTP ${res.status}`

@@ -19,6 +19,7 @@ dist-ssr
 .env.*
 !.env.example
 openrouter.txt
+.openrouter.env
 
 # Editor directories and files
 .vscode/*

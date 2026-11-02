@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { Routes, Route, Link, useLocation } from 'react-router-dom'
-import { LayoutGrid, LogOut, Users, Cpu, ShieldCheck } from 'lucide-react'
+import { LayoutGrid, LogOut, Users, Cpu, ShieldCheck, RefreshCw } from 'lucide-react'
 import { useAuth } from './lib/auth.jsx'
 import Dashboard from './pages/Dashboard.jsx'
 import Members from './pages/Members.jsx'
@@ -33,6 +33,13 @@ function UserMenu() {
 
   return (
     <div className="ml-auto flex items-center gap-2">
+      <button
+        onClick={() => window.location.reload()}
+        className="flex items-center gap-1.5 rounded-full border border-indigo-100 bg-indigo-50 px-3 py-1.5 text-[13px] font-black text-indigo-700 shadow-sm transition hover:bg-indigo-100"
+        title="Refresh App"
+      >
+        <RefreshCw size={14} /> <span className="hidden sm:block">Refresh App</span>
+      </button>
       {canManage ? (
         <Link
           to="/members"
@@ -117,14 +124,14 @@ export default function App() {
   const isEditor = /\/codeframes\/|\/rawdata$|\/verbatim$/.test(location.pathname)
 
   return (
-    <div className="flex min-h-screen flex-col">
+    <div className="flex min-h-screen min-w-0 flex-col overflow-x-hidden">
       <header className="sticky top-0 z-40 border-b border-slate-200/80 bg-white/80 backdrop-blur">
-        <div className={`mx-auto flex h-14 items-center gap-3 px-5 ${isEditor ? '' : 'max-w-6xl'}`}>
-          <Link to="/" className="flex items-center gap-2.5">
+        <div className={`mx-auto flex h-14 min-w-0 items-center gap-3 px-4 xl:px-5 ${isEditor ? '' : 'max-w-7xl'}`}>
+          <Link to="/" className="flex min-w-0 shrink-0 items-center gap-2.5">
             <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-md shadow-indigo-200">
               <LayoutGrid size={17} />
             </span>
-            <span className="text-base font-bold tracking-tight text-slate-900">
+            <span className="hidden text-base font-bold tracking-tight text-slate-900 sm:inline">
               Codeframe <span className="text-indigo-600">Studio</span>
             </span>
           </Link>
@@ -162,6 +169,7 @@ export default function App() {
           />
         </Routes>
       </main>
+
     </div>
   )
 }

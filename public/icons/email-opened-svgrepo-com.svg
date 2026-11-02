@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="800" height="800" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Email opened logo">
+  <defs>
+    <linearGradient id="goldTop" x1="256" y1="0" x2="256" y2="350" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#DFA34F"/>
+      <stop offset="1" stop-color="#CF993F"/>
+    </linearGradient>
+    <linearGradient id="goldLight" x1="64" y1="156" x2="448" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F0BA7D"/>
+      <stop offset="1" stop-color="#E5A864"/>
+    </linearGradient>
+    <linearGradient id="goldDeep" x1="0" y1="150" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#C0874A"/>
+      <stop offset="1" stop-color="#ECB168"/>
+    </linearGradient>
+    <filter id="shadow" x="-15%" y="-15%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#8A5A22" flood-opacity="0.24"/>
+    </filter>
+  </defs>
+  <g filter="url(#shadow)">
+    <path d="M20 166c0-8 5-16 13-21L235 9c12-8 30-8 42 0l202 136c8 5 13 13 13 21v36L278 346c-13 9-31 9-44 0L20 202v-36z" fill="url(#goldTop)"/>
+    <path d="M20 183l217 132c12 7 26 7 38 0l217-132v316c0 7-6 13-13 13H33c-7 0-13-6-13-13V183z" fill="#C0874A"/>
+    <path d="M20 183l230 148L20 500V183z" fill="url(#goldLight)"/>
+    <path d="M492 183L262 331l230 169V183z" fill="#E5A864"/>
+    <path d="M33 512h446c9 0 14-3 13-8L273 318c-11-9-25-9-36 0L20 504c-1 5 4 8 13 8z" fill="url(#goldDeep)"/>
+    <path d="M256 333L20 183v-17c0-5 2-10 6-14l215 145c9 6 21 6 30 0l215-145c4 4 6 9 6 14v17L256 333z" fill="#F3C086" opacity="0.55"/>
+    <path d="M256 333L45 499h422L256 333z" fill="#ECB168" opacity="0.86"/>
+    <path d="M31 159l204-138c12-8 30-8 42 0l204 138-210 140c-9 6-21 6-30 0L31 159z" fill="url(#goldTop)" opacity="0.95"/>
+  </g>
+</svg>

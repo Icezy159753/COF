@@ -1,0 +1,17 @@
+{
+  "name": "cof-functions",
+  "private": true,
+  "type": "commonjs",
+  "engines": {
+    "node": "22"
+  },
+  "main": "index.js",
+  "dependencies": {
+    "firebase-admin": "^13.6.0",
+    "firebase-functions": "^6.4.0",
+    "sav-reader": "^2.0.8"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
+  }
+}

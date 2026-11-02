@@ -1,15 +1,17 @@
+/* eslint-disable react-hooks/preserve-manual-memoization, react-hooks/set-state-in-effect */
 import { useEffect, useMemo, useState } from 'react'
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
 import {
   ArrowLeft, Plus, Trash2, ChevronRight, Layers, Settings2, Wand2,
-  Database, ListTree, Search, Sparkles, Loader2, CornerDownRight, Table2,
+  Database, ListTree, Search, Sparkles, Loader2, CornerDownRight, Table2, Download, MoreHorizontal,
 } from 'lucide-react'
 import { useStore, useRawdata, uid } from '../store.jsx'
 import {
-  BOX_META, isWorkBox, detectTextQuestions, newRowCount, findOtherColumn, freqByValue, hasOtherOption, shortSheetName,
+  BOX_META, isWorkBox, detectTextQuestions, newRowCount, findOtherColumns, freqByValue, hasOtherOption, shortSheetName,
 } from '../lib/boxes.js'
 import { uniqueAnswers } from '../lib/answers.js'
 import { aiAssignToFrame } from '../lib/aiGroup.js'
+import { exportQuestionCodeList } from '../lib/excel.js'
 import { findSameFrameQuestions, valueSignature } from '../lib/spss.js'
 import {
   Button, Modal, Field, TextInput, EmptyState, ConfirmDelete, BoxBadge, Badge, NewRowsBadge, Toast,
@@ -28,6 +30,7 @@ export default function BoxPage() {
   const [view, setView] = useState('codeframes') // 'codeframes' | 'codebook'
   const [creating, setCreating] = useState(null) // ข้อความสถานะระหว่างสร้าง codeframe (AI)
   const [smartSetupOpen, setSmartSetupOpen] = useState(false)
+  const [boxActionsOpen, setBoxActionsOpen] = useState(false)
   const [toast, setToast] = useState(null)
 
   // เปิดกล่องครั้งแรก → ทำเครื่องหมายว่าดูแถวล่าสุดแล้ว (ล้าง badge แถวใหม่)
@@ -36,22 +39,13 @@ export default function BoxPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, box, project?.rawMeta?.rowCount])
 
-  if (!isWorkBox(box)) return <Navigate to={`/projects/${projectId}`} replace />
-  if (!project) {
-    return (
-      <div className="mx-auto max-w-6xl px-5 py-16 text-center text-slate-400">
-        ไม่พบโปรเจกต์นี้ — <Link to="/" className="text-indigo-600 underline">กลับหน้าหลัก</Link>
-      </div>
-    )
-  }
-
-  const meta = BOX_META[box]
-  const boxState = project.boxes[box]
-  const pickedIds = boxState.questionIds
+  const meta = BOX_META[box] ?? {}
+  const boxState = project?.boxes?.[box] ?? { questionIds: [] }
+  const pickedIds = boxState.questionIds ?? []
   const codeframes = state.codeframes.filter((c) => c.projectId === projectId && c.box === box)
-  const raw = project.rawMeta
-  const newRows = newRowCount(project, box)
-  const codebook = project.codebook
+  const raw = project?.rawMeta
+  const newRows = project ? newRowCount(project, box) : 0
+  const codebook = project?.codebook
 
   // สร้าง "1 ชีท" จากกลุ่มข้อที่ใช้โครงเดียวกัน (group) + ลง code ปลายปิด + (ทางเลือก) AI จับ 'อื่นๆ'
   //   onProgress(text) = อัปเดตข้อความสถานะระหว่างเรียก AI
@@ -67,8 +61,11 @@ export default function BoxPage() {
     const otherQs = []
     for (const q of group) {
       questionIds.push(q.id)
-      const oq = rawdata ? findOtherColumn(rawdata, q, codebook) : null
-      if (oq) { questionIds.push(oq.id); otherQs.push(oq) }
+      const oqs = rawdata ? findOtherColumns(rawdata, q, codebook) : []
+      for (const oq of oqs) {
+        if (!questionIds.includes(oq.id)) questionIds.push(oq.id)
+        otherQs.push(oq)
+      }
     }
 
     let assignedCount = 0
@@ -158,13 +155,17 @@ export default function BoxPage() {
         otherMembers: g.members,
       }))
       .filter((g) => g.questions.length)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [codebook, rawdata, excludedSet])
 
   const otherQuestionCount = useMemo(
     () => autoGroups.reduce((s, g) => s + g.otherMembers.length, 0),
     [autoGroups],
   )
+  const otherColumnCount = useMemo(() => {
+    if (!rawdata || !codebook) return 0
+    return autoGroups.reduce((sum, g) => sum + g.questions.reduce((s, q) => s + findOtherColumns(rawdata, q, codebook).length, 0), 0)
+  }, [autoGroups, rawdata, codebook])
 
   // id ของคอลัมน์ "อื่นๆ ระบุ" (ข้อความ) ทั้งหมด — ใช้ "ไม่นับเป็นข้อ" และไม่โชว์ในชิป
   const otherColIds = useMemo(() => {
@@ -172,12 +173,21 @@ export default function BoxPage() {
     if (!rawdata?.questions || !codebook?.byVar) return s
     for (const q of rawdata.questions) {
       if (!codebook.byVar[q.label]?.values?.length) continue
-      const oc = findOtherColumn(rawdata, q, codebook)
-      if (oc) s.add(oc.id)
+      const ocs = findOtherColumns(rawdata, q, codebook)
+      for (const oc of ocs) s.add(oc.id)
     }
     return s
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [codebook, rawdata])
+
+  if (!isWorkBox(box)) return <Navigate to={`/projects/${projectId}`} replace />
+  if (!project) {
+    return (
+      <div className="mx-auto max-w-6xl px-5 py-16 text-center text-slate-400">
+        ไม่พบโปรเจกต์นี้ — <Link to="/" className="text-indigo-600 underline">กลับหน้าหลัก</Link>
+      </div>
+    )
+  }
 
   // Auto: สร้าง Codeframe เดียว แยกเป็นชีทตามกลุ่มโครง (ทุกข้อที่มี 'อื่นๆ ระบุ')
   //   "สร้างก่อน ยังไม่จับรหัส" → ไม่เรียก AI ตอนสร้าง (เสร็จทันที) แล้วค่อยกด Group เองในแต่ละข้อ
@@ -190,8 +200,8 @@ export default function BoxPage() {
       )
       // คงลำดับชีทตามลำดับกลุ่มเดิม (Promise.all คืนผลตามลำดับ input อยู่แล้ว)
       const sheets = results.map((r) => r.sheet)
-      const totalOther = results.reduce((s, r) => s + r.otherCount, 0)
-      const cf = addCodeframe({ projectId, box, name: 'CE — อื่นๆ ระบุ (auto)', sheets })
+      const totalOther = results.reduce((s, r) => r.otherCount + s, 0)
+      const cf = addCodeframe({ projectId, box, name: 'Codeframe CE other', sheets })
       setCreating(null)
       setToast({
         type: 'success',
@@ -203,6 +213,19 @@ export default function BoxPage() {
     } catch (err) {
       setCreating(null)
       setToast({ type: 'warning', title: 'สร้างอัตโนมัติไม่สำเร็จ', message: err.message, duration: 8000 })
+    }
+  }
+
+  const confirmDeleteCodeframe = () => {
+    if (!deleting) return
+    const remainingInBox = codeframes.filter((cf) => cf.id !== deleting.id)
+    deleteCodeframe(deleting.id)
+    setDeleting(null)
+    if (remainingInBox.length === 0) {
+      updateProjectBox(projectId, box, { questionIds: [], seenRowCount: project?.rawMeta?.rowCount ?? 0 })
+      setWizardOpen(false)
+      setPickOpen(false)
+      setToast({ type: 'info', title: 'ล้าง Codeframe แล้ว', message: 'กล่องนี้เริ่มใหม่ ไม่จำข้อ/ค่าเดิมจาก Codeframe ก่อนหน้า', duration: 3500 })
     }
   }
 
@@ -233,32 +256,35 @@ export default function BoxPage() {
       ) : (
         <>
           {/* แท็บ: Codeframe | ดูตัวอย่างข้อมูล | โจทย์ & Code */}
-          <div className="mb-5 flex w-fit flex-wrap items-center gap-2 text-xs font-semibold">
+          <div className="mb-5 flex w-full flex-wrap items-center gap-2 text-xs font-semibold">
             <button
               onClick={() => setView('codeframes')}
-              className={`flex cursor-pointer items-center gap-1.5 rounded-xl border px-3 py-2 transition-colors ${
+              className={`group inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-xl border px-3 py-2 font-black shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md ${
                 view === 'codeframes'
-                  ? 'border-indigo-300 bg-white text-indigo-700 shadow-sm'
-                  : 'border-transparent bg-slate-100 text-slate-500 hover:text-slate-700'
+                  ? 'border-sky-300 bg-gradient-to-r from-sky-500 to-indigo-600 text-white shadow-sky-200'
+                  : 'animate-pulse border-sky-100 bg-white text-sky-700 hover:animate-none hover:border-sky-300 hover:bg-sky-50'
               }`}
             >
               <Layers size={14} /> Codeframe ({codeframes.length})
+              <ChevronRight size={13} className="ce-cta-float" />
             </button>
             <Link
               to={`/projects/${projectId}/rawdata`}
-              className="flex cursor-pointer items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-600 hover:border-indigo-300 hover:text-indigo-600"
+              className="group inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-xl border border-emerald-100 bg-white px-3 py-2 font-black text-emerald-700 shadow-sm transition-all hover:-translate-y-0.5 hover:border-emerald-300 hover:bg-emerald-50 hover:shadow-md"
             >
               <Table2 size={14} /> ดูตัวอย่างข้อมูล
+              <ChevronRight size={13} className="ce-cta-float" />
             </Link>
             <button
               onClick={() => setView('codebook')}
-              className={`flex cursor-pointer items-center gap-1.5 rounded-xl border px-3 py-2 transition-colors ${
+              className={`group inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-xl border px-3 py-2 font-black shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md ${
                 view === 'codebook'
-                  ? 'border-indigo-300 bg-white text-indigo-700 shadow-sm'
-                  : 'border-transparent bg-slate-100 text-slate-500 hover:text-slate-700'
+                  ? 'border-violet-300 bg-gradient-to-r from-indigo-500 to-violet-600 text-white shadow-violet-200'
+                  : 'animate-pulse border-violet-100 bg-white text-violet-700 hover:animate-none hover:border-violet-300 hover:bg-violet-50'
               }`}
             >
               <Database size={14} /> โจทย์ &amp; Code{codebook ? ` (${codebook.varCount})` : ''}
+              <ChevronRight size={13} className="ce-cta-float" />
             </button>
           </div>
 
@@ -270,98 +296,36 @@ export default function BoxPage() {
               creating={creating}
               onCreate={createFromCode}
               onGoAttach={() => navigate(`/projects/${projectId}`)}
+              projectName={project.name}
             />
           ) : (
           <>
-          {/* เลือกชนิดข้อของกล่องนี้ (จุดที่ CE/OE ต่างกัน) */}
-          <div className="mb-5 flex flex-wrap items-center gap-2 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <Settings2 size={16} className="text-slate-400" />
-            <span className="text-sm font-semibold text-slate-700">ข้อที่กล่องนี้ดูแล:</span>
-            {pickedIds.length ? (
-              <>
-                {pickedIds.slice(0, 8).map((qid) => (
-                  <Badge key={qid} color="indigo">
-                    {raw.questions.find((q) => q.id === qid)?.label ?? qid}
-                  </Badge>
-                ))}
-                {pickedIds.length > 8 && <Badge color="indigo">+{pickedIds.length - 8}</Badge>}
-              </>
-            ) : (
-              <span className="text-sm text-rose-500">ยังไม่ได้เลือกข้อ</span>
-            )}
-            <Button variant="secondary" size="sm" className="ml-auto" onClick={() => setPickOpen(true)}>
-              <Settings2 size={14} /> เลือกข้อของกล่อง {meta.label}
-            </Button>
-          </div>
-
           {/* Auto: สร้าง Codeframe เดียวจากทุกข้อที่มี 'อื่นๆ ระบุ' แยกชีทตามกลุ่มโครง */}
           {codebook && autoGroups.length > 0 && (
-            <div
-              role="button"
-              tabIndex={0}
-              onClick={() => setSmartSetupOpen((v) => !v)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault()
-                  setSmartSetupOpen((v) => !v)
-                }
-              }}
-              className="group mb-5 cursor-pointer overflow-hidden rounded-[1.7rem] border border-indigo-100 bg-white shadow-[0_18px_55px_rgba(79,70,229,0.10)] ring-1 ring-white transition-all duration-300 hover:-translate-y-0.5 hover:border-indigo-200 hover:shadow-[0_26px_75px_rgba(79,70,229,0.18)] focus:outline-none focus:ring-2 focus:ring-indigo-300"
-            >
-              <div className="relative flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between">
-                <span className="pointer-events-none absolute inset-y-0 left-0 w-1.5 bg-gradient-to-b from-indigo-500 via-violet-500 to-sky-400 transition-all duration-300 group-hover:w-2.5" />
-                <span className="pointer-events-none absolute -right-10 -top-14 h-32 w-32 rounded-full bg-indigo-100/70 blur-2xl transition-transform duration-500 group-hover:scale-125" />
-                <span className="pointer-events-none absolute right-20 bottom-0 h-20 w-20 rounded-full bg-sky-100/60 blur-2xl transition-transform duration-500 group-hover:translate-x-4" />
-                <span className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-indigo-200 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
-
-                <div className="relative flex min-w-0 items-start gap-3 pl-1.5">
-                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-slate-950 text-white shadow-lg shadow-indigo-100 transition-transform duration-300 group-hover:scale-105 group-hover:rotate-3">
-                    <Sparkles size={20} />
+            <div className="mb-5 overflow-hidden rounded-2xl border border-indigo-100 bg-white shadow-sm">
+              <button
+                type="button"
+                onClick={() => setSmartSetupOpen((v) => !v)}
+                className="flex w-full cursor-pointer items-center gap-3 px-3 py-2.5 text-left hover:bg-indigo-50/50"
+              >
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-950 text-white shadow-sm">
+                  <Sparkles size={17} />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <p className="text-[11px] font-black uppercase tracking-[0.16em] text-indigo-400">Smart setup</p>
+                    <Badge color="emerald">พร้อมสร้าง</Badge>
+                    <Badge color="indigo">{otherQuestionCount} Other Q / {otherColumnCount} Oth cols</Badge>
+                    <Badge color="violet">{autoGroups.length} กลุ่ม</Badge>
                   </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="text-[11px] font-black uppercase tracking-[0.18em] text-indigo-400">Smart setup</p>
-                      <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-black text-emerald-600 ring-1 ring-emerald-100">
-                        พร้อมสร้าง
-                      </span>
-                      <span className="inline-flex items-center gap-1 rounded-full bg-white px-2 py-0.5 text-[11px] font-black text-slate-400 ring-1 ring-slate-200 transition-colors group-hover:text-indigo-600 group-hover:ring-indigo-200">
-                        คลิกดูรายละเอียด
-                        <ChevronRight size={12} className={`transition-transform ${smartSetupOpen ? 'rotate-90' : ''}`} />
-                      </span>
-                    </div>
-                    <h3 className="mt-1 text-base font-black text-slate-950 transition-colors group-hover:text-indigo-950">
-                      เจอชุดคำถาม “อื่นๆ ระบุ” ที่สร้าง Codeframe ได้ทันที
-                    </h3>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <span className="rounded-full bg-indigo-50 px-3 py-1 text-xs font-black text-indigo-700 ring-1 ring-indigo-100 transition-transform group-hover:-translate-y-0.5">
-                        {otherQuestionCount} ข้อ Other
-                      </span>
-                      <span className="rounded-full bg-violet-50 px-3 py-1 text-xs font-black text-violet-700 ring-1 ring-violet-100 transition-transform group-hover:-translate-y-0.5">
-                        {autoGroups.length} กลุ่มโครง
-                      </span>
-                      <span className="rounded-full bg-slate-50 px-3 py-1 text-xs font-bold text-slate-500 ring-1 ring-slate-200 transition-transform group-hover:-translate-y-0.5">
-                        แยกเป็น {autoGroups.length} ชีทอัตโนมัติ
-                      </span>
-                    </div>
-                    <p className="mt-2 max-w-2xl text-xs leading-relaxed text-slate-500">
-                      ระบบจะสร้าง Codeframe เดียว แยกข้อโครงเดียวกันไว้ชีทเดียวกัน และลงโค้ดปลายปิดให้ก่อน — จากนั้นค่อยเปิดแต่ละชีทเพื่อกด Group อัตโนมัติให้ AI จับ “อื่นๆ”
-                    </p>
-                  </div>
+                  <p className="mt-0.5 truncate text-sm font-bold text-slate-800">เจอชุดคำถาม “อื่นๆ ระบุ” ที่สร้าง Codeframe ได้ทันที</p>
                 </div>
-
-                <Button
-                  className="relative shrink-0 rounded-2xl px-4 py-2.5 shadow-lg shadow-indigo-200/70 transition-transform hover:scale-[1.03]"
-                  disabled={!!creating}
-                  onClick={(e) => { e.stopPropagation(); autoBuildAll() }}
-                >
-                  {creating ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
-                  {creating ? 'กำลังสร้าง…' : `สร้าง ${autoGroups.length} ชีท`}
-                </Button>
-              </div>
+                <ChevronRight size={16} className={`shrink-0 text-slate-400 transition-transform ${smartSetupOpen ? 'rotate-90' : ''}`} />
+              </button>
 
               {smartSetupOpen && (
-                <div className="relative border-t border-indigo-50 bg-gradient-to-br from-indigo-50/55 via-white to-sky-50/45 px-5 py-4">
-                  <div className="grid gap-3 md:grid-cols-3">
+                <div className="border-t border-indigo-50 bg-gradient-to-br from-indigo-50/55 via-white to-sky-50/45 px-4 py-4">
+                  <div className="mb-3 grid gap-3 md:grid-cols-3">
                     {[
                       ['1', 'แยกกลุ่มโครง', `รวมข้อที่ใช้ชุด code เดียวกันเป็น ${autoGroups.length} ชีท`],
                       ['2', 'ลง code ปลายปิด', 'เติมรหัสจาก Codebook ให้ก่อนแบบไม่ต้องรอ AI'],
@@ -376,17 +340,11 @@ export default function BoxPage() {
                       </div>
                     ))}
                   </div>
-                  <div className="mt-3 flex flex-wrap gap-1.5">
-                    {autoGroups.slice(0, 8).map((g, i) => (
-                      <span key={`${g.questions[0]?.id ?? i}-preview`} className="rounded-lg bg-white px-2 py-1 text-[11px] font-bold text-slate-500 ring-1 ring-indigo-100">
-                        {shortSheetName(g.cb?.code || g.questions[0]?.label || `ชีท ${i + 1}`)} · {g.questions.length} ข้อ
-                      </span>
-                    ))}
-                    {autoGroups.length > 8 && (
-                      <span className="rounded-lg bg-white px-2 py-1 text-[11px] font-bold text-indigo-500 ring-1 ring-indigo-100">
-                        +{autoGroups.length - 8} ชีท
-                      </span>
-                    )}
+                  <div className="flex justify-end">
+                    <Button disabled={!!creating} onClick={autoBuildAll}>
+                      {creating ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
+                      {creating ? 'กำลังสร้าง…' : `สร้าง ${autoGroups.length} ชีท`}
+                    </Button>
                   </div>
                 </div>
               )}
@@ -400,9 +358,30 @@ export default function BoxPage() {
             <h2 className="flex items-center gap-2 text-sm font-bold tracking-wide text-slate-500 uppercase">
               <Layers size={16} /> Codeframe ({codeframes.length})
             </h2>
-            <Button size="sm" onClick={() => setWizardOpen(true)}>
-              <Plus size={14} /> สร้าง Codeframe
-            </Button>
+            <div className="relative">
+              <Button size="sm" variant="secondary" onClick={() => setBoxActionsOpen((v) => !v)}>
+                <MoreHorizontal size={14} /> เมนู
+              </Button>
+              {boxActionsOpen && (
+                <>
+                  <div className="fixed inset-0 z-30" onClick={() => setBoxActionsOpen(false)} />
+                  <div className="absolute right-0 z-40 mt-1.5 w-60 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 shadow-xl">
+                    <button onClick={() => { setBoxActionsOpen(false); setPickOpen(true) }} className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-slate-600 hover:bg-indigo-50 hover:text-indigo-700">
+                      <Settings2 size={14} /> เลือกข้อของกล่อง {meta.label}
+                    </button>
+                    <button onClick={() => { setBoxActionsOpen(false); setWizardOpen(true) }} className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-slate-600 hover:bg-indigo-50 hover:text-indigo-700">
+                      <Plus size={14} /> สร้าง Codeframe
+                    </button>
+                    <button onClick={() => { setBoxActionsOpen(false); navigate(`/projects/${projectId}/rawdata`) }} className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-slate-600 hover:bg-indigo-50 hover:text-indigo-700">
+                      <Table2 size={14} /> ดูตัวอย่างข้อมูล
+                    </button>
+                    <button onClick={() => { setBoxActionsOpen(false); setView('codebook') }} className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-slate-600 hover:bg-indigo-50 hover:text-indigo-700">
+                      <Database size={14} /> โจทย์ & Code
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
 
           {codeframes.length === 0 ? (
@@ -447,24 +426,6 @@ export default function BoxPage() {
                           สร้างเมื่อ {new Date(cf.createdAt).toLocaleDateString('th-TH')}
                         </span>
                       </div>
-                      <div className="mt-3 flex flex-wrap gap-1.5">
-                        {cf.sheets.map((sh) => {
-                          // โชวเฉพาะ "ชื่อข้อหลัก" (ไม่รวมคอลัมน์ 'อื่นๆ ระบุ') แบบไม่ซ้ำ
-                          const labels = [...new Set(
-                            sh.questionIds
-                              .filter((qid) => !otherColIds.has(qid))
-                              .map((qid) => raw.questions.find((q) => q.id === qid)?.label ?? qid),
-                          )]
-                          return (
-                            <span
-                              key={sh.id}
-                              className="rounded-lg bg-slate-50 px-2 py-1 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200"
-                            >
-                              {labels.join(', ').toUpperCase() || '—'}
-                            </span>
-                          )
-                        })}
-                      </div>
                     </Link>
                     <button
                       title="ลบ Codeframe"
@@ -507,7 +468,7 @@ export default function BoxPage() {
       <ConfirmDelete
         open={!!deleting}
         onClose={() => setDeleting(null)}
-        onConfirm={() => deleteCodeframe(deleting.id)}
+        onConfirm={confirmDeleteCodeframe}
         what={`Codeframe "${deleting?.name}"`}
       />
 
@@ -520,27 +481,31 @@ export default function BoxPage() {
 // แท็บ "โจทย์ & Code": เลือกข้อ → ดู variable label (โจทย์) + value labels (Code)
 //   จาก SPSS codebook และสร้าง Codeframe จาก Code ได้
 // ============================================================
-function CodebookViewer({ codebook, questions, rawdata, creating, onCreate, onGoAttach }) {
+function CodebookViewer({ codebook, questions, rawdata, creating, onCreate, onGoAttach, projectName }) {
   const [query, setQuery] = useState('')
   const [onlyOther, setOnlyOther] = useState(false) // กรองเฉพาะข้อที่มี "อื่นๆ ระบุ"
   const cbByLabel = codebook?.byVar ?? {}
 
-  // ข้อไหนมี "อื่นๆ ระบุ" = มีคอลัมน์ text ถัดไป หรือ value label มีคำว่า อื่น/ระบุ/other
-  // (คำนวณครั้งเดียว ไม่ผูกกับ query เพื่อความเร็ว)
+  // ข้อไหนมี "อื่นๆ ระบุ" + ช่อง Oth จริงกี่ช่อง
   const otherMap = useMemo(() => {
     const m = {}
     for (const q of questions) {
       const cb = cbByLabel[q.label]
-      m[q.id] = hasOtherOption(cb) // มีตัวเลือก "อื่นๆ ระบุ" จริง (รองรับทุกรูปแบบ)
+      const otherQs = rawdata ? findOtherColumns(rawdata, q, codebook) : []
+      m[q.id] = { hasOther: hasOtherOption(cb), count: otherQs.length, labels: otherQs.map((x) => x.label) }
     }
     return m
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [questions, rawdata, codebook])
 
   const otherCount = useMemo(
-    () => questions.filter((q) => otherMap[q.id] && cbByLabel[q.label]?.values?.length).length,
+    () => questions.filter((q) => otherMap[q.id]?.hasOther && cbByLabel[q.label]?.values?.length).length,
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [questions, otherMap, codebook],
+  )
+  const otherColumnCount = useMemo(
+    () => questions.reduce((sum, q) => sum + (otherMap[q.id]?.count ?? 0), 0),
+    [questions, otherMap],
   )
 
   // ข้อที่จะแสดงในเมนูซ้าย — คงลำดับตามไฟล์ SPSS/Rawdata จริง ห้าม sort แบบตัวอักษร
@@ -549,7 +514,7 @@ function CodebookViewer({ codebook, questions, rawdata, creating, onCreate, onGo
     return questions
       .map((question, order) => {
         const cb = cbByLabel[question.label] ?? null
-        return { question, cb, order, hasCodes: !!cb?.values?.length, hasOther: !!otherMap[question.id] }
+        return { question, cb, order, hasCodes: !!cb?.values?.length, hasOther: !!otherMap[question.id]?.hasOther, otherCount: otherMap[question.id]?.count ?? 0 }
       })
       .filter(({ question, cb, hasOther }) => {
         if (onlyOther && !hasOther) return false
@@ -562,13 +527,51 @@ function CodebookViewer({ codebook, questions, rawdata, creating, onCreate, onGo
   const [selectedId, setSelectedId] = useState(null)
   const selected = list.find((x) => x.question.id === selectedId) ?? list.find((x) => x.hasCodes) ?? list[0]
 
-  // ความถี่ของแต่ละค่า + ข้อ 'อื่นๆ ระบุ' (คอลัมน์ถัดไป) ของข้อที่เลือก
+  const exportVisibleQuestionCodes = () => {
+    const rows = []
+    list.forEach(({ question, cb }, questionIndex) => {
+      const freqMap = rawdata ? freqByValue(rawdata, question) : new Map()
+      const cols = question.columns ?? [question.index]
+      const baseTotal = rawdata
+        ? rawdata.rows.filter((row) => cols.some((c) => String(row?.[c] ?? '').trim() !== '')).length
+        : 0
+      const variable = cb?.code || question.label
+      rows.push({
+        kind: 'question',
+        no: questionIndex + 1,
+        variable,
+        text: cb?.label || '— ไม่มี variable label ใน .sav —',
+        frequency: baseTotal,
+        baseTotal,
+      })
+      if (cb?.values?.length) {
+        cb.values.forEach((v) => {
+          const value = String(v.value)
+          rows.push({
+            kind: 'code',
+            no: '',
+            variable: '',
+            text: `${value} ${v.label}`,
+            frequency: freqMap.get(value) ?? 0,
+          })
+        })
+      }
+    })
+    const suffix = onlyOther ? '_other_only' : ''
+    const safeName = `${projectName || 'COF'}_${list.length}_questions_codes_simple${suffix}.xlsx`.replace(/[\\/:*?"<>|]/g, '_')
+    exportQuestionCodeList(rows, safeName)
+  }
+
+  // ความถี่ของแต่ละค่า + ข้อ 'อื่นๆ ระบุ' หลายคอลัมน์ของข้อที่เลือก
   const freq = useMemo(
     () => (selected && rawdata ? freqByValue(rawdata, selected.question) : new Map()),
     [selected, rawdata],
   )
-  const otherQ = useMemo(
-    () => (selected && rawdata ? findOtherColumn(rawdata, selected.question, codebook) : null),
+  const otherQs = useMemo(
+    () => {
+      if (!selected || !rawdata) return []
+      return findOtherColumns(rawdata, selected.question, codebook)
+    },
     [selected, rawdata, codebook],
   )
   // ข้ออื่นที่ใช้โครง code เหมือนกันเป๊ะ (จะถูก auto รวมเข้าโครงเดียวกันตอนสร้าง)
@@ -612,7 +615,7 @@ function CodebookViewer({ codebook, questions, rawdata, creating, onCreate, onGo
           <CornerDownRight size={13} />
           {onlyOther ? 'แสดงทุกข้อ' : `เฉพาะข้อที่มี "อื่นๆ ระบุ"`}
           <span className={`ml-auto rounded px-1.5 py-0.5 text-[10px] font-bold ${onlyOther ? 'bg-white/25 text-white' : 'bg-amber-200 text-amber-800'}`}>
-            {otherCount}
+            {otherCount} Q / {otherColumnCount} cols
           </span>
         </button>
         <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto">
@@ -621,7 +624,7 @@ function CodebookViewer({ codebook, questions, rawdata, creating, onCreate, onGo
               {onlyOther ? 'ไม่มีข้อที่มี "อื่นๆ ระบุ"' : 'ไม่พบข้อที่ตรงกับคำค้น'}
             </p>
           ) : (
-            list.map(({ question, cb, hasCodes, hasOther }) => {
+            list.map(({ question, cb, hasCodes, hasOther, otherCount }) => {
               const active = selected?.question.id === question.id
               return (
                 <button
@@ -635,7 +638,7 @@ function CodebookViewer({ codebook, questions, rawdata, creating, onCreate, onGo
                   <span className="truncate font-medium">{question.label}</span>
                   {hasOther && (
                     <span className={`shrink-0 rounded px-1 py-0.5 text-[9px] font-bold ${active ? 'bg-white/25 text-white' : 'bg-amber-100 text-amber-700'}`}>
-                      อื่นๆ
+                      Oth{otherCount ? ` x${otherCount}` : ''}
                     </span>
                   )}
                   {hasCodes ? (
@@ -671,18 +674,25 @@ function CodebookViewer({ codebook, questions, rawdata, creating, onCreate, onGo
                     <span className="text-indigo-400">(auto รวมให้)</span>
                   </p>
                 )}
-                {otherQ && (
-                  <p className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-sky-600">
-                    <CornerDownRight size={12} /> มีข้อ "อื่นๆ ระบุ": <b>{otherQ.label}</b> (สร้างก่อน แล้วกด "Group อัตโนมัติ" ให้ AI จับเข้ารหัส)
+                {otherQs.length > 0 && (
+                  <p className="mt-1 inline-flex max-w-full items-center gap-1 text-[11px] font-medium text-sky-600">
+                    <CornerDownRight size={12} /> มีข้อ "อื่นๆ ระบุ" {otherQs.length} ช่อง:
+                    <b className="truncate">{otherQs.map((q) => q.label).join(', ')}</b>
+                    <span>(สร้างก่อน แล้วกด "Group อัตโนมัติ" ให้ AI จับเข้ารหัส)</span>
                   </p>
                 )}
               </div>
-              {selected.hasCodes && (
-                <Button size="sm" className="shrink-0" disabled={!!creating} onClick={() => onCreate(selected.question)}>
-                  {creating ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-                  {creating ? 'กำลังสร้าง…' : 'สร้าง Codeframe จาก Code นี้'}
+              <div className="flex shrink-0 flex-wrap justify-end gap-2">
+                <Button size="sm" variant="secondary" onClick={exportVisibleQuestionCodes} disabled={!list.length}>
+                  <Download size={14} /> Export โจทย์ & Code
                 </Button>
-              )}
+                {selected.hasCodes && (
+                  <Button size="sm" disabled={!!creating} onClick={() => onCreate(selected.question)}>
+                    {creating ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                    {creating ? 'กำลังสร้าง…' : 'สร้าง Codeframe จาก Code นี้'}
+                  </Button>
+                )}
+              </div>
             </div>
 
             {creating && (

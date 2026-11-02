@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/refs */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Grid } from 'react-window'
@@ -10,6 +11,18 @@ const COL_W = 100 // ความกว้างคอลัมน์เท่�
 const ROW_H = 30 // ความสูงแถว (px)
 const INDEX_W = 50 // ความกว้างคอลัมน์เลขแถว
 const HEAD_H = 38 // ความสูงหัวตาราง
+
+const normCell = (v) => String(v ?? '').trim()
+const sortValueOptions = (a, b) => {
+  const an = Number(a.value)
+  const bn = Number(b.value)
+  const aNum = a.value !== '' && Number.isFinite(an)
+  const bNum = b.value !== '' && Number.isFinite(bn)
+  if (aNum && bNum) return an - bn
+  if (aNum) return -1
+  if (bNum) return 1
+  return String(a.value).localeCompare(String(b.value), 'th', { numeric: true, sensitivity: 'base' })
+}
 
 // เซลล์ข้อมูล (react-window เรนเดอร์เฉพาะที่มองเห็น)
 //   isEdited = เซลล์ที่ถูก "ลง Code ทับค่าอื่นๆ" → ไฮไลต์เหลือง
@@ -38,31 +51,51 @@ function Cell({ columnIndex, rowIndex, style, rows, flashCol, masks }) {
 export default function RawdataViewer() {
   const { projectId } = useParams()
   const navigate = useNavigate()
-  const { state } = useStore()
+  const { state, setRawdata, loadOriginalRawdata } = useStore()
   const project = state.projects.find((p) => p.id === projectId)
   const { rawdata, loading, error } = useRawdata(projectId)
+  const [originalState, setOriginalState] = useState({ projectId: null, data: null })
+  const originalRawdata = originalState.projectId === projectId ? originalState.data : null
 
   const [query, setQuery] = useState('') // ค้นหาเนื้อหา (กรองแถว ทุกคอลัมน์)
   const [colFilters, setColFilters] = useState({}) // { colIndex: text } กรองรายคอลัมน์
+  const [colExactFilters, setColExactFilters] = useState({}) // { colIndex: value } เลือกจากรายการค่า/Code → match ตรงตัว
   const [filterPopover, setFilterPopover] = useState(null) // { col, x, y }
   const [finderOpen, setFinderOpen] = useState(false) // Ctrl+F ค้นหาคอลัมน์
   const [finderQuery, setFinderQuery] = useState('')
   const [flashCol, setFlashCol] = useState(null)
+  const [savingCodedRawdata, setSavingCodedRawdata] = useState(false)
 
   const headerRef = useRef(null)
   const indexRef = useRef(null)
   const gridRef = useRef(null)
   const flashTimer = useRef(null)
+  const autoSaveTimer = useRef(null)
+  const autoSaveSignature = useRef('')
+
+  useEffect(() => {
+    let cancelled = false
+    if (!projectId || !(project?.rawMeta?.originalChunkCount > 0)) return () => { cancelled = true }
+    loadOriginalRawdata(projectId)
+      .then((value) => { if (!cancelled) setOriginalState({ projectId, data: value }) })
+      .catch((err) => console.error('load original rawdata for Verbatim repair failed', err))
+    return () => { cancelled = true }
+  }, [projectId, project?.rawMeta?.originalChunkCount, loadOriginalRawdata])
 
   // ลง Code แบบ "เขียนทับค่าอื่นๆ" (ไม่เพิ่มคอลัมน์) + จดจุดที่แก้ไว้ไฮไลต์
   const coded = useMemo(() => {
     if (!rawdata) return null
     const sheets = state.codeframes.filter((c) => c.projectId === projectId).flatMap((c) => c.sheets ?? [])
     if (!sheets.length) return null
-    const { rows, editMaskRows, editedCols } = buildOverwrittenRawdata(rawdata, { sheets }, project.codebook)
+    const { rows, editMaskRows, editedCols, editLog } = buildOverwrittenRawdata(
+      rawdata,
+      { sheets },
+      project.codebook,
+      { sourceRawdata: originalRawdata },
+    )
     if (!editedCols.size) return null
-    return { rows, editMaskRows, editedCols }
-  }, [rawdata, state.codeframes, projectId, project])
+    return { rows, editMaskRows, editedCols, editLog }
+  }, [rawdata, originalRawdata, state.codeframes, projectId, project])
 
   const editedCols = coded?.editedCols ?? null
 
@@ -79,26 +112,69 @@ export default function RawdataViewer() {
     const allMasks = coded?.editMaskRows ?? null
     const q = query.trim().toLowerCase()
     const active = Object.entries(colFilters)
-      .map(([ci, v]) => [Number(ci), v.trim().toLowerCase()])
+      .map(([ci, v]) => [Number(ci), v.trim().toLowerCase(), colExactFilters[ci] != null ? normCell(colExactFilters[ci]).toLowerCase() : null])
       .filter(([, v]) => v)
     if (!q && !active.length) return { rows: all, masks: allMasks }
     const outRows = []
     const outMasks = allMasks ? [] : null
     all.forEach((row, i) => {
       if (q && !row.some((c) => String(c ?? '').toLowerCase().includes(q))) return
-      for (const [ci, v] of active) {
-        if (!String(row[ci] ?? '').toLowerCase().includes(v)) return
+      for (const [ci, v, exact] of active) {
+        const cell = normCell(row[ci]).toLowerCase()
+        if (exact != null) {
+          if (cell !== exact) return
+        } else if (!cell.includes(v)) return
       }
       outRows.push(row)
       if (outMasks) outMasks.push(allMasks[i])
     })
     return { rows: outRows, masks: outMasks }
-  }, [rawdata, coded, query, colFilters])
+  }, [rawdata, coded, query, colFilters, colExactFilters])
 
   const activeFilterCount = useMemo(
     () => Object.values(colFilters).filter((v) => v.trim()).length,
     [colFilters],
   )
+
+  const getColumnOptions = (ci) => {
+    const all = coded?.rows ?? rawdata?.rows ?? []
+    const q = rawdata?.questions?.find((x) => (x.columns ?? [x.index]).includes(ci))
+    const cb = q ? project?.codebook?.byVar?.[q.label] : null
+    const targetCf = q
+      ? state.codeframes.find((c) => c.projectId === projectId && (c.sheets ?? []).some((s) => (s.questionIds ?? []).includes(q.id)))
+      : null
+    const targetSheet = targetCf?.sheets?.find((s) => (s.questionIds ?? []).includes(q.id))
+    const labels = new Map((cb?.values ?? []).map((v) => [normCell(v.value), String(v.label ?? '').trim()]))
+    const counts = new Map()
+    let blank = 0
+    for (const row of all) {
+      const v = normCell(row?.[ci])
+      if (!v) { blank += 1; continue }
+      counts.set(v, (counts.get(v) ?? 0) + 1)
+    }
+    const options = [...counts.entries()]
+      .map(([value, count]) => ({ value, count, label: labels.get(value) || '' }))
+      .sort(sortValueOptions)
+    const missingCodebook = [...labels.entries()]
+      .filter(([value]) => value && !counts.has(value))
+      .map(([value, label]) => ({ value, count: 0, label }))
+      .sort(sortValueOptions)
+    return {
+      question: q,
+      questionLabel: cb?.label || q?.label || headers[ci] || '',
+      options,
+      missingCodebook,
+      blank,
+      total: all.length,
+      unique: counts.size,
+      targetCf,
+      targetSheet,
+    }
+  }
+
+  const activeFilterItems = useMemo(() => Object.entries(colFilters)
+    .map(([ci, v]) => ({ ci: Number(ci), value: String(v ?? '').trim(), exact: colExactFilters[ci] != null }))
+    .filter((it) => it.value), [colFilters, colExactFilters])
 
   // คอลัมน์ที่ตรงกับคำค้นใน finder (Ctrl+F)
   const finderMatches = useMemo(() => {
@@ -137,9 +213,35 @@ export default function RawdataViewer() {
     if (!rawdata) return
     const base = (project.rawMeta?.fileName ?? 'rawdata').replace(/\.(xlsx|xls|csv)$/i, '')
     const suffix = query || activeFilterCount ? '_filtered' : ''
-    if (coded) exportRawdataWithEdits(headers, rows, masks, editedCols, `${base}_coded${suffix}.xlsx`)
+    if (coded) exportRawdataWithEdits(headers, rows, masks, editedCols, `${base}_coded${suffix}.xlsx`, coded.editLog ?? [])
     else exportRawdataXlsx(headers, rows, `${base}${suffix}.xlsx`)
   }
+
+  useEffect(() => {
+    if (!rawdata || !coded || savingCodedRawdata) return undefined
+    const editCount = coded.editMaskRows.reduce((sum, set) => sum + (set?.size ?? 0), 0)
+    if (!editCount) return undefined
+    const signature = JSON.stringify((coded.editLog ?? []).map((e) => [
+      e.rowKey, e.action, e.codeColumnIndex, e.newCode, e.ruleCode, e.sourceCodeColumnIndex,
+    ]))
+    if (signature && autoSaveSignature.current === signature) return undefined
+    clearTimeout(autoSaveTimer.current)
+    autoSaveTimer.current = setTimeout(async () => {
+      autoSaveSignature.current = signature
+      setSavingCodedRawdata(true)
+      try {
+        await setRawdata(projectId, { ...rawdata, rows: coded.rows }, { updateOriginal: false })
+        setColFilters({})
+        setColExactFilters({})
+      } catch (err) {
+        console.error('auto-save coded rawdata failed', err)
+        autoSaveSignature.current = ''
+      } finally {
+        setSavingCodedRawdata(false)
+      }
+    }, 350)
+    return () => clearTimeout(autoSaveTimer.current)
+  }, [rawdata, coded, savingCodedRawdata, setRawdata, projectId])
 
   // Ctrl+F → เปิดตัวค้นหาคอลัมน์ (แทน find ของเบราว์เซอร์), Esc → ปิด
   useEffect(() => {
@@ -199,7 +301,7 @@ export default function RawdataViewer() {
         <div className="ml-auto flex items-center gap-2">
           {activeFilterCount > 0 && (
             <button
-              onClick={() => setColFilters({})}
+              onClick={() => { setColFilters({}); setColExactFilters({}) }}
               className="inline-flex cursor-pointer items-center gap-1 rounded-lg bg-indigo-50 px-2.5 py-1.5 text-xs font-semibold text-indigo-600 hover:bg-indigo-100"
             >
               <ListFilter size={13} /> ล้างตัวกรอง {activeFilterCount} คอลัมน์
@@ -231,11 +333,38 @@ export default function RawdataViewer() {
             )}
           </div>
 
-          <Button size="sm" onClick={handleExport} disabled={!rawdata}>
+          <Button size="sm" onClick={handleExport} disabled={!rawdata || savingCodedRawdata}>
             <Download size={14} /> Export Excel
           </Button>
         </div>
       </div>
+
+      {activeFilterItems.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 border-b border-indigo-100 bg-indigo-50/60 px-5 py-2">
+          <span className="text-xs font-bold text-indigo-700">Active Filters:</span>
+          {activeFilterItems.map((it) => (
+            <button
+              key={it.ci}
+              onClick={() => {
+                setColFilters((f) => { const next = { ...f }; delete next[it.ci]; return next })
+                setColExactFilters((f) => { const next = { ...f }; delete next[it.ci]; return next })
+              }}
+              className="inline-flex max-w-xs items-center gap-1.5 rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 ring-1 ring-indigo-100 hover:bg-rose-50 hover:text-rose-600"
+              title="คลิกเพื่อลบ filter นี้"
+            >
+              <span className="truncate">{headers[it.ci]}</span>
+              <span className="font-mono text-indigo-600">{it.exact ? '=' : 'มี'} {it.value}</span>
+              <X size={12} />
+            </button>
+          ))}
+          <button
+            onClick={() => { setColFilters({}); setColExactFilters({}) }}
+            className="ml-auto text-xs font-bold text-indigo-500 hover:text-rose-600"
+          >
+            ล้างทั้งหมด
+          </button>
+        </div>
+      )}
 
       {/* ===== Grid ===== */}
       <div className="min-h-0 flex-1 bg-slate-50">
@@ -335,50 +464,138 @@ export default function RawdataViewer() {
       </div>
 
       {/* ===== Popover กรองรายคอลัมน์ ===== */}
-      {filterPopover && (
-        <>
-          <div className="fixed inset-0 z-40" onClick={() => setFilterPopover(null)} />
-          <div
-            className="fixed z-50 w-60 rounded-xl border border-slate-200 bg-white p-3 shadow-xl"
-            style={{ left: filterPopover.x, top: filterPopover.y + 4 }}
-          >
-            <p className="mb-1.5 truncate text-xs font-bold text-slate-700">
-              กรอง: {headers[filterPopover.col]}
-            </p>
-            <input
-              autoFocus
-              value={colFilters[filterPopover.col] ?? ''}
-              onChange={(e) =>
-                setColFilters((f) => ({ ...f, [filterPopover.col]: e.target.value }))
-              }
-              onKeyDown={(e) => { if (e.key === 'Enter') setFilterPopover(null) }}
-              placeholder="พิมพ์ค่าที่ต้องการ (มีคำนี้)…"
-              className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
-            />
-            <div className="mt-2 flex justify-between">
-              <button
-                onClick={() => {
-                  setColFilters((f) => {
-                    const next = { ...f }
-                    delete next[filterPopover.col]
-                    return next
-                  })
-                  setFilterPopover(null)
-                }}
-                className="cursor-pointer text-xs font-medium text-slate-400 hover:text-rose-500"
-              >
-                ล้างคอลัมน์นี้
-              </button>
-              <button
-                onClick={() => setFilterPopover(null)}
-                className="cursor-pointer rounded-lg bg-indigo-600 px-3 py-1 text-xs font-semibold text-white hover:bg-indigo-700"
-              >
-                เสร็จ
-              </button>
+      {filterPopover && (() => {
+        const info = getColumnOptions(filterPopover.col)
+        const searchText = colFilters[filterPopover.col] ?? ''
+        const q = searchText.trim().toLowerCase()
+        const visibleOptions = info.options
+          .filter((it) => !q || it.value.toLowerCase().includes(q) || it.label.toLowerCase().includes(q))
+          .slice(0, 80)
+        const chooseValue = (value) => {
+          setColFilters((f) => ({ ...f, [filterPopover.col]: value }))
+          setColExactFilters((f) => ({ ...f, [filterPopover.col]: value }))
+          setFilterPopover(null)
+        }
+        const clearColumn = () => {
+          setColFilters((f) => {
+            const next = { ...f }
+            delete next[filterPopover.col]
+            return next
+          })
+          setColExactFilters((f) => {
+            const next = { ...f }
+            delete next[filterPopover.col]
+            return next
+          })
+          setFilterPopover(null)
+        }
+        return (
+          <>
+            <div className="fixed inset-0 z-40" onClick={() => setFilterPopover(null)} />
+            <div
+              className="fixed z-50 w-80 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl"
+              style={{ left: Math.min(filterPopover.x, window.innerWidth - 330), top: filterPopover.y + 4 }}
+            >
+              <div className="border-b border-slate-100 p-3">
+                <p className="truncate text-xs font-bold text-slate-700">
+                  กรอง: {headers[filterPopover.col]}
+                </p>
+                {info.questionLabel && info.questionLabel !== headers[filterPopover.col] && (
+                  <p className="mt-0.5 truncate text-[11px] text-slate-400">{info.questionLabel}</p>
+                )}
+                <input
+                  autoFocus
+                  value={searchText}
+                  onChange={(e) => {
+                    const v = e.target.value
+                    setColFilters((f) => ({ ...f, [filterPopover.col]: v }))
+                    setColExactFilters((f) => {
+                      const next = { ...f }
+                      delete next[filterPopover.col]
+                      return next
+                    })
+                  }}
+                  onKeyDown={(e) => { if (e.key === 'Enter') setFilterPopover(null) }}
+                  placeholder="Search / พิมพ์ค้นหา Code หรือค่า…"
+                  className="mt-2 w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                />
+                <div className="mt-2 grid grid-cols-4 gap-1 text-center text-[10px]">
+                  <div className="rounded bg-slate-50 px-1 py-1"><b className="block text-slate-700">{info.total}</b><span className="text-slate-400">rows</span></div>
+                  <div className="rounded bg-slate-50 px-1 py-1"><b className="block text-slate-700">{info.unique}</b><span className="text-slate-400">unique</span></div>
+                  <div className="rounded bg-slate-50 px-1 py-1"><b className="block text-slate-700">{info.blank}</b><span className="text-slate-400">blank</span></div>
+                  <div className="rounded bg-indigo-50 px-1 py-1"><b className="block text-indigo-700">{rows.length}</b><span className="text-indigo-400">shown</span></div>
+                </div>
+                <div className="mt-2 flex items-center gap-2">
+                  {info.targetCf ? (
+                    <button
+                      onClick={() => navigate(`/projects/${projectId}/${info.targetCf.box}/codeframes/${info.targetCf.id}`)}
+                      className="flex-1 rounded-lg bg-emerald-50 px-2 py-1.5 text-xs font-bold text-emerald-700 hover:bg-emerald-100"
+                      title={info.targetSheet ? `เปิดชีท ${info.targetSheet.name}` : 'เปิด Codeframe ของข้อนี้'}
+                    >
+                      เปิด Codeframe ข้อนี้
+                    </button>
+                  ) : (
+                    <span className="flex-1 rounded-lg bg-slate-50 px-2 py-1.5 text-center text-xs font-semibold text-slate-400">ยังไม่มี Codeframe ของคอลัมน์นี้</span>
+                  )}
+                  <button onClick={handleExport} className="rounded-lg bg-slate-100 px-2 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-200">Export filtered</button>
+                </div>
+                <p className="mt-1 text-[10px] text-slate-400">
+                  คลิกค่าเพื่อกรองตรง Code นั้นทันที · พิมพ์เองยังค้นหาแบบมีคำนี้ได้
+                </p>
+              </div>
+
+              <div className="max-h-72 overflow-y-auto p-1.5">
+                {visibleOptions.length ? (
+                  visibleOptions.map((it) => (
+                    <button
+                      key={it.value}
+                      onClick={() => chooseValue(it.value)}
+                      className={`flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-left ${colExactFilters[filterPopover.col] === it.value ? 'bg-indigo-100 ring-1 ring-indigo-200' : 'hover:bg-indigo-50'}`}
+                    >
+                      <span className="w-12 shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-center font-mono text-xs font-bold text-slate-700">
+                        {it.value}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-xs text-slate-700">
+                        {it.label || '(ไม่มี label)'}
+                      </span>
+                      <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700">
+                        {it.count}
+                      </span>
+                    </button>
+                  ))
+                ) : (
+                  <p className="px-3 py-5 text-center text-xs text-slate-400">ไม่พบค่า/Code ที่ตรงกับคำค้น</p>
+                )}
+                {!q && info.missingCodebook.length > 0 && (
+                  <div className="mt-1 border-t border-slate-100 pt-1">
+                    <p className="px-2 py-1 text-[10px] font-bold text-slate-400">Code ใน codebook ที่ยังไม่มีในข้อมูลชุดนี้</p>
+                    {info.missingCodebook.slice(0, 30).map((it) => (
+                      <button
+                        key={`missing-${it.value}`}
+                        onClick={() => chooseValue(it.value)}
+                        className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left opacity-70 hover:bg-slate-50"
+                      >
+                        <span className="w-12 shrink-0 rounded bg-slate-50 px-1.5 py-0.5 text-center font-mono text-xs font-bold text-slate-500">{it.value}</span>
+                        <span className="min-w-0 flex-1 truncate text-xs text-slate-500">{it.label}</span>
+                        <span className="text-[10px] text-slate-300">0</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex justify-between border-t border-slate-100 px-3 py-2">
+                <button onClick={clearColumn} className="cursor-pointer text-xs font-medium text-slate-400 hover:text-rose-500">
+                  ล้างคอลัมน์นี้
+                </button>
+                <button onClick={() => setFilterPopover(null)} className="cursor-pointer rounded-lg bg-indigo-600 px-3 py-1 text-xs font-semibold text-white hover:bg-indigo-700">
+                  เสร็จ
+                </button>
+              </div>
             </div>
-          </div>
-        </>
-      )}
+          </>
+        )
+      })()}
 
       {/* ===== ตัวค้นหาคอลัมน์ (Ctrl+F) ===== */}
       {finderOpen && (
