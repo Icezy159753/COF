@@ -979,7 +979,6 @@ export default function ProjectHub() {
       to: `/projects/${projectId}/verbatim`,
       count: project.boxes.verbatim.questionIds.length,
       picked: project.boxes.verbatim.questionIds.length,
-      comingSoon: true, // ยังไม่เปิดใช้ — รอพัฒนาต่อ
     },
   ]
 

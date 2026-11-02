@@ -12,6 +12,7 @@ function encodeCell({ r, c }) {
   return `${col}${r + 1}`
 }
 import { findOtherColumns, isOtherLabel, shortSheetName, closedQuestionGroupColumns, questionGroupBase, otherColumnsForCode, otherCodeFromColumnLabel } from './boxes.js'
+import { buildEditOverlay, verbatimContext } from './editOverlay.js'
 
 const normalizeRuleText = (v) => String(v ?? '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\u00A0/g, ' ').replace(/\s+/g, ' ').trim()
 
@@ -500,13 +501,44 @@ function styleEdits(ws, editMaskRows, editedCols) {
     if (!ws[ref]) ws[ref] = { t: 's', v: '' }
     ws[ref].s = headerStyle
   }
-  editMaskRows.forEach((set, r) => {
-    for (const c of set) {
+  // แก้ข้อความ (Verbatim / แก้จากหน้า Codeframe) → เขียว · ลง Code → เหลือง
+  const textStyle = {
+    fill: { patternType: 'solid', fgColor: { rgb: 'BBF7D0' } }, // emerald-200
+    font: { color: { rgb: '065F46' } },
+    alignment: { vertical: 'top', wrapText: true },
+  }
+  editMaskRows.forEach((mask, r) => {
+    if (!mask) return
+    // mask = Set<col> (จุดลง Code) หรือ Map<col, 'code'|'verbatim'|'text'>
+    const entries = mask instanceof Map ? mask.entries() : [...mask].map((c) => [c, 'code'])
+    for (const [c, kind] of entries) {
       const ref = encodeCell({ r: r + 1, c }) // +1 เพราะแถว 0 = หัวตาราง
       if (!ws[ref]) ws[ref] = { t: 's', v: '' }
-      ws[ref].s = cellStyle
+      ws[ref].s = kind === 'code' ? cellStyle : textStyle
     }
   })
+}
+
+// ชีทสรุปจุดแก้ข้อความ (Verbatim/Codeframe) — ลิงก์กับเซลล์เขียวในชีทข้อมูล (แถว/คอลัมน์ตรงกัน)
+function appendTextEditLogSheet(XLSXStyle, wb, textLog = []) {
+  if (!textLog.length) return
+  const aoa = [
+    ['แถวในไฟล์', 'SbjNum', 'คอลัมน์', 'Original', 'หลังแก้ (Clean)', 'ที่มา'],
+    ...textLog.map((e) => [e.row + 1, e.sbj, e.header, e.original, e.current, e.source]),
+  ]
+  const ws = XLSXStyle.utils.aoa_to_sheet(aoa)
+  ws['!cols'] = [{ wch: 10 }, { wch: 14 }, { wch: 18 }, { wch: 60 }, { wch: 60 }, { wch: 22 }]
+  for (let c = 0; c < 6; c++) {
+    const ref = encodeCell({ r: 0, c })
+    if (ws[ref]) ws[ref].s = { fill: { patternType: 'solid', fgColor: { rgb: '059669' } }, font: { bold: true, color: { rgb: 'FFFFFF' } } }
+  }
+  for (let r = 1; r < aoa.length; r++) {
+    for (const c of [3, 4]) {
+      const ref = encodeCell({ r, c })
+      if (ws[ref]) ws[ref].s = { alignment: { vertical: 'top', wrapText: true } }
+    }
+  }
+  XLSXStyle.utils.book_append_sheet(wb, ws, 'Text Edit Log')
 }
 
 function appendRecodeLogSheet(XLSXStyle, wb, editLog = []) {
@@ -530,7 +562,7 @@ function appendRecodeLogSheet(XLSXStyle, wb, editLog = []) {
 
 // ---------- Export Rawdata (ที่แสดง/กรองในหน้า Viewer) พร้อมไฮไลต์จุดที่แก้ ----------
 // rows = แถวที่กรองแล้ว · masks = Set<col> ของจุดที่แก้ ต่อแถว (เรียงตรงกับ rows)
-export async function exportRawdataWithEdits(headers, rows, masks, editedCols, fileName, editLog = []) {
+export async function exportRawdataWithEdits(headers, rows, masks, editedCols, fileName, editLog = [], textLog = []) {
   const XLSXStyle = await loadXLSXStyle()
   const toCell = (v) => {
     if (typeof v !== 'string') return v
@@ -547,13 +579,28 @@ export async function exportRawdataWithEdits(headers, rows, masks, editedCols, f
   const wb = XLSXStyle.utils.book_new()
   XLSXStyle.utils.book_append_sheet(wb, ws, 'Rawdata + Code')
   appendRecodeLogSheet(XLSXStyle, wb, editLog)
+  appendTextEditLogSheet(XLSXStyle, wb, textLog)
   XLSXStyle.writeFile(wb, fileName.endsWith('.xlsx') ? fileName : `${fileName}.xlsx`)
 }
 
 // ---------- Export Data: Rawdata ที่ลง Code แล้ว (เขียนทับอื่นๆ + ไฮไลต์) ----------
-export async function exportCodedData(rawdata, codeframe, codebook, fileName) {
+// options.original + options.verbatimCfg → ไฮไลต์จุดที่แก้ข้อความ (กล่อง Verbatim / หน้า Codeframe) ในไฟล์เดียวกันด้วย
+export async function exportCodedData(rawdata, codeframe, codebook, fileName, options = {}) {
   const XLSXStyle = await loadXLSXStyle()
-  const { rows, editMaskRows, editedCols, editLog } = buildOverwrittenRawdata(rawdata, codeframe, codebook)
+  const built = buildOverwrittenRawdata(rawdata, codeframe, codebook)
+  const { rows, editLog } = built
+  let { editMaskRows, editedCols } = built
+  let textLog = []
+  if (options.original) {
+    const ctx = verbatimContext(rawdata, options.verbatimCfg)
+    const overlay = buildEditOverlay({
+      rows, original: options.original, headers: rawdata.headers ?? [], ceMaskRows: editMaskRows,
+      sbjQ: ctx.sbjQ, verbatimCols: ctx.verbatimCols, aiFixed: ctx.aiFixed,
+    })
+    editMaskRows = overlay.kinds
+    editedCols = overlay.editedCols
+    textLog = overlay.log
+  }
   const headers = rawdata.headers ?? []
   const toCell = (v) => {
     if (typeof v !== 'string') return v
@@ -570,6 +617,7 @@ export async function exportCodedData(rawdata, codeframe, codebook, fileName) {
   const wb = XLSXStyle.utils.book_new()
   XLSXStyle.utils.book_append_sheet(wb, ws, 'Rawdata + Code')
   appendRecodeLogSheet(XLSXStyle, wb, editLog)
+  appendTextEditLogSheet(XLSXStyle, wb, textLog)
   XLSXStyle.writeFile(wb, fileName.endsWith('.xlsx') ? fileName : `${fileName}.xlsx`)
 }
 

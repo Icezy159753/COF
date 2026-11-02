@@ -5,6 +5,7 @@ import { Grid } from 'react-window'
 import { ArrowLeft, FileSpreadsheet, Search, X, Download, ListFilter } from 'lucide-react'
 import { useStore, useRawdata, LoadingAnimation } from '../store.jsx'
 import { exportRawdataXlsx, exportRawdataWithEdits, buildOverwrittenRawdata } from '../lib/excel.js'
+import { buildEditOverlay, verbatimContext } from '../lib/editOverlay.js'
 import { Button } from '../components/ui.jsx'
 
 const COL_W = 100 // ความกว้างคอลัมน์เท่ากันทุกช่อง (px) — เท่า default ของ Google Sheets
@@ -28,7 +29,20 @@ const sortValueOptions = (a, b) => {
 //   isEdited = เซลล์ที่ถูก "ลง Code ทับค่าอื่นๆ" → ไฮไลต์เหลือง
 function Cell({ columnIndex, rowIndex, style, rows, flashCol, masks }) {
   const v = rows[rowIndex]?.[columnIndex] ?? ''
-  const isEdited = masks?.[rowIndex]?.has(columnIndex)
+  // masks = Map<col, 'code'|'verbatim'|'text'> ต่อแถว — ลง Code = เหลือง · แก้ข้อความ = เขียว
+  const kind = masks?.[rowIndex]?.get?.(columnIndex)
+  if (kind && kind !== 'code') {
+    return (
+      <div
+        style={style}
+        title={`${v}\n— แก้ข้อความแล้ว (${kind === 'verbatim' ? 'กล่อง Verbatim' : 'Codeframe'})`}
+        className={`truncate border-b border-r border-slate-100 px-2 text-xs leading-[30px] ${flashCol === columnIndex ? 'bg-amber-100' : 'bg-emerald-100'} text-emerald-900`}
+      >
+        {v}
+      </div>
+    )
+  }
+  const isEdited = kind === 'code'
   return (
     <div
       style={style}
@@ -51,7 +65,7 @@ function Cell({ columnIndex, rowIndex, style, rows, flashCol, masks }) {
 export default function RawdataViewer() {
   const { projectId } = useParams()
   const navigate = useNavigate()
-  const { state, setRawdata, loadOriginalRawdata } = useStore()
+  const { state, patchRawdata, loadOriginalRawdata } = useStore()
   const project = state.projects.find((p) => p.id === projectId)
   const { rawdata, loading, error } = useRawdata(projectId)
   const [originalState, setOriginalState] = useState({ projectId: null, data: null })
@@ -97,7 +111,22 @@ export default function RawdataViewer() {
     return { rows, editMaskRows, editedCols, editLog }
   }, [rawdata, originalRawdata, state.codeframes, projectId, project])
 
-  const editedCols = coded?.editedCols ?? null
+  // จุดที่แก้ทั้งหมดใน Rawdata ชุดเดียวกัน: CE ลง Code (เหลือง) + แก้ข้อความจาก Verbatim/Codeframe เทียบต้นฉบับ (เขียว)
+  const overlay = useMemo(() => {
+    if (!rawdata) return null
+    const ctx = verbatimContext(rawdata, project?.boxes?.verbatim)
+    const o = buildEditOverlay({
+      rows: coded?.rows ?? rawdata.rows ?? [],
+      original: originalRawdata,
+      headers: rawdata.headers ?? [],
+      ceMaskRows: coded?.editMaskRows ?? null,
+      sbjQ: ctx.sbjQ,
+      verbatimCols: ctx.verbatimCols,
+      aiFixed: ctx.aiFixed,
+    })
+    return o.editedCols.size ? o : null
+  }, [rawdata, coded, originalRawdata, project?.boxes?.verbatim])
+  const editedCols = overlay?.editedCols ?? null
 
   const headers = useMemo(() => {
     if (!rawdata) return []
@@ -107,15 +136,16 @@ export default function RawdataViewer() {
   }, [rawdata])
 
   // กรองแถว: ค้นหารวม (query) + ตัวกรองรายคอลัมน์ (AND) — เก็บ mask จุดที่แก้ให้ตรงแถวที่กรอง
-  const { rows, masks } = useMemo(() => {
+  const { rows, masks, idxs } = useMemo(() => {
     const all = coded?.rows ?? rawdata?.rows ?? []
-    const allMasks = coded?.editMaskRows ?? null
+    const allMasks = overlay?.kinds ?? null
     const q = query.trim().toLowerCase()
     const active = Object.entries(colFilters)
       .map(([ci, v]) => [Number(ci), v.trim().toLowerCase(), colExactFilters[ci] != null ? normCell(colExactFilters[ci]).toLowerCase() : null])
       .filter(([, v]) => v)
-    if (!q && !active.length) return { rows: all, masks: allMasks }
+    if (!q && !active.length) return { rows: all, masks: allMasks, idxs: null }
     const outRows = []
+    const outIdx = []
     const outMasks = allMasks ? [] : null
     all.forEach((row, i) => {
       if (q && !row.some((c) => String(c ?? '').toLowerCase().includes(q))) return
@@ -126,10 +156,11 @@ export default function RawdataViewer() {
         } else if (!cell.includes(v)) return
       }
       outRows.push(row)
+      outIdx.push(i)
       if (outMasks) outMasks.push(allMasks[i])
     })
-    return { rows: outRows, masks: outMasks }
-  }, [rawdata, coded, query, colFilters, colExactFilters])
+    return { rows: outRows, masks: outMasks, idxs: outIdx }
+  }, [rawdata, coded, overlay, query, colFilters, colExactFilters])
 
   const activeFilterCount = useMemo(
     () => Object.values(colFilters).filter((v) => v.trim()).length,
@@ -214,7 +245,15 @@ export default function RawdataViewer() {
     const base = (project.rawMeta?.fileName ?? 'rawdata').replace(/\.(xlsx|xls|csv)$/i, '')
     const suffix = query || activeFilterCount ? '_filtered' : ''
     try {
-      if (coded) await exportRawdataWithEdits(headers, rows, masks, editedCols, `${base}_coded${suffix}.xlsx`, coded.editLog ?? [])
+      if (overlay) {
+        // Text Edit Log ให้ "แถวในไฟล์" ตรงกับแถวที่ส่งออกจริง (กรณีกรองอยู่)
+        let textLog = overlay.log
+        if (idxs) {
+          const pos = new Map(idxs.map((orig, k) => [orig + 1, k + 1]))
+          textLog = overlay.log.filter((e) => pos.has(e.row)).map((e) => ({ ...e, row: pos.get(e.row) }))
+        }
+        await exportRawdataWithEdits(headers, rows, masks, editedCols, `${base}_edited${suffix}.xlsx`, coded?.editLog ?? [], textLog)
+      }
       else await exportRawdataXlsx(headers, rows, `${base}${suffix}.xlsx`)
     } catch (err) {
       console.error(err)
@@ -235,7 +274,15 @@ export default function RawdataViewer() {
       autoSaveSignature.current = signature
       setSavingCodedRawdata(true)
       try {
-        await setRawdata(projectId, { ...rawdata, rows: coded.rows }, { updateOriginal: false })
+        // Stamp เฉพาะเซลล์ที่ลง Code ลง Rawdata ล่าสุด (ไม่ทับข้อความที่กล่อง Verbatim แก้)
+        const cells = []
+        coded.rows.forEach((row, r) => {
+          const before = rawdata.rows[r] ?? []
+          for (let c = 0; c < row.length; c++) {
+            if (String(row[c] ?? '') !== String(before[c] ?? '')) cells.push({ r, c, next: row[c] })
+          }
+        })
+        await patchRawdata(projectId, cells)
         setColFilters({})
         setColExactFilters({})
       } catch (err) {
@@ -246,7 +293,7 @@ export default function RawdataViewer() {
       }
     }, 350)
     return () => clearTimeout(autoSaveTimer.current)
-  }, [rawdata, coded, savingCodedRawdata, setRawdata, projectId])
+  }, [rawdata, coded, savingCodedRawdata, patchRawdata, projectId])
 
   // Ctrl+F → เปิดตัวค้นหาคอลัมน์ (แทน find ของเบราว์เซอร์), Esc → ปิด
   useEffect(() => {
@@ -296,7 +343,13 @@ export default function RawdataViewer() {
         {rawdata && (
           <span className="text-xs text-slate-400">
             {headers.length} คอลัมน์ · {rawdata.rows.length} แถว
-            {editedCols && <> · <b className="text-indigo-600">{editedCols.size}</b> ข้อที่ลง Code (ไฮไลต์)</>}
+            {overlay && (
+              <>
+                {' · '}<b className="text-indigo-600">{editedCols.size}</b> คอลัมน์ที่แก้
+                {overlay.counts.code > 0 && <span className="ml-1.5 rounded bg-yellow-100 px-1.5 py-0.5 font-semibold text-yellow-800">ลง Code {overlay.counts.code}</span>}
+                {overlay.counts.verbatim + overlay.counts.text > 0 && <span className="ml-1 rounded bg-emerald-100 px-1.5 py-0.5 font-semibold text-emerald-800">แก้ข้อความ {overlay.counts.verbatim + overlay.counts.text}</span>}
+              </>
+            )}
             {(query || activeFilterCount > 0) && (
               <> · กรองเหลือ <b className="text-indigo-600">{rowCount}</b> แถว</>
             )}
@@ -406,7 +459,7 @@ export default function RawdataViewer() {
                     <div
                       key={ci}
                       onClick={(e) => openFilter(ci, e)}
-                      title={`${h}${isEdited ? ' — มีการลง Code ทับค่าอื่นๆ' : ''}${active ? ` — กรอง: "${active}"` : ' (คลิกเพื่อกรอง)'}`}
+                      title={`${h}${isEdited ? ' — มีจุดที่แก้ (ลง Code / แก้ข้อความ)' : ''}${active ? ` — กรอง: "${active}"` : ' (คลิกเพื่อกรอง)'}`}
                       style={{ width: COL_W, height: HEAD_H }}
                       className={`flex shrink-0 cursor-pointer items-center gap-1 border-r border-slate-200 px-2 text-xs font-bold ${
                         flashCol === ci

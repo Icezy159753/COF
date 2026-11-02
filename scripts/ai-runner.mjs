@@ -640,7 +640,10 @@ async function handleCode(body) {
 async function handleReview(body) { return handleCode(body) }
 
 function buildSpellPrompt(body) {
-  return promptHeader('{"fixes":[{"i":0,"fixed":"fixed text","reason":"short reason"}]} only include items that need fixes', { items: body.items || [] })
+  return promptHeader(
+    '{"fixes":[{"i":0,"fixed":"full corrected text","reason":"short Thai note"}]} You are a meticulous Thai proofreader for market-research verbatims. For each item fix ONLY spelling mistakes, wrong tone marks/vowels (e.g. รุ้สึก -> รู้สึก), accidental duplicated words and obvious typos. Do NOT rephrase, summarise, translate, change meaning, change slang/brand names, or add/remove content. Keep the original punctuation, slashes (/), dashes, line breaks and spacing style. "fixed" must be the whole corrected text. Include ONLY items that actually need a change; omit items that are already correct.',
+    { items: body.items || [] },
+  )
 }
 async function handleSpellcheck(body) {
   if (!Array.isArray(body.items) || !body.items.length) throw new Error('ไม่มีข้อความให้ตรวจ')

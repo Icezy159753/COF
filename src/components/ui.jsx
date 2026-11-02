@@ -132,13 +132,13 @@ export function NewRowsBadge({ count, className = '' }) {
   )
 }
 
-export function Modal({ open, onClose, title, children, wide = false }) {
+export function Modal({ open, onClose, title, children, wide = false, xwide = false }) {
   if (!open) return null
   return (
     <div className="fixed inset-0 z-[160] flex items-center justify-center overflow-y-auto px-4 py-6">
       <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={onClose} />
       <div
-        className={`relative max-h-[calc(100vh-3rem)] w-full ${wide ? 'max-w-4xl' : 'max-w-lg'} overflow-y-auto rounded-2xl bg-white p-4 shadow-2xl xl:p-6`}
+        className={`relative max-h-[calc(100vh-3rem)] w-full ${xwide ? 'max-w-7xl' : wide ? 'max-w-4xl' : 'max-w-lg'} overflow-y-auto rounded-2xl bg-white p-4 shadow-2xl xl:p-6`}
       >
         <div className="mb-4 flex min-w-0 items-start justify-between gap-3">
           <h3 className="min-w-0 break-words text-lg font-bold text-slate-900">{title}</h3>

@@ -910,6 +910,33 @@ describe('exportCodedData', () => {
     assert.equal(fillArgb(ws.getCell('B5')), 'FFFDE047')
   })
 
+  test('with original: Verbatim/text edits are highlighted green in the same file + Text Edit Log', async () => {
+    const { rawdata: base, codebook, codeframe } = saFixture()
+    // เพิ่มข้อความ Q3_text (อยู่ในกล่อง Verbatim) — R003 แก้คำผิดทั้ง Q1_oth (แก้จากหน้า Codeframe) และ Q3_text (กล่อง Verbatim)
+    const rawdata = {
+      headers: [...base.headers, 'Q3_text'],
+      questions: [...base.questions, { id: 'q3', label: 'Q3_text', index: 3, type: 'text', columns: [3] }],
+      rows: base.rows.map((r, i) => [...r, i === 2 ? 'ร้านนี้อร่อยมากๆ' : 'ปกติ']),
+    }
+    const original = { rows: rawdata.rows.map((r, i) => (i === 2 ? [r[0], r[1], 'ไม่รุ้', 'ร้านนี้อร่อยมาก'] : r.slice())) }
+    rawdata.rows[2][2] = 'ไม่รู้'
+    const calls = await captureStyleWrites(() => exportCodedData(rawdata, codeframe, codebook, 'linked', {
+      original, verbatimCfg: { sbjNumId: 'q0', questionIds: ['q3'] },
+    }))
+    assert.deepEqual(calls[0].wb.SheetNames, ['Rawdata + Code', 'Recode Log', 'Text Edit Log'])
+    const ws = (await loadExcel(calls[0].buf)).getWorksheet('Rawdata + Code')
+    assert.equal(fillArgb(ws.getCell('B2')), 'FFFDE047', 'CE code stamp stays yellow')
+    assert.equal(fillArgb(ws.getCell('C4')), 'FFBBF7D0', 'text edit from Codeframe page = green')
+    assert.equal(fillArgb(ws.getCell('D4')), 'FFBBF7D0', 'Verbatim-box edit = green')
+    assert.equal(fillArgb(ws.getCell('D1')), 'FF4F46E5', 'edited column header highlighted')
+    assert.equal(fillArgb(ws.getCell('D3')), null)
+    assert.deepEqual(sheetAoA(calls[0].buf, 'Text Edit Log'), [
+      ['แถวในไฟล์', 'SbjNum', 'คอลัมน์', 'Original', 'หลังแก้ (Clean)', 'ที่มา'],
+      [4, 'R003', 'Q1_oth', 'ไม่รุ้', 'ไม่รู้', 'แก้ข้อความ (Codeframe / อื่น ๆ)'],
+      [4, 'R003', 'Q3_text', 'ร้านนี้อร่อยมาก', 'ร้านนี้อร่อยมากๆ', 'Verbatim · Human แก้'],
+    ])
+  })
+
   test('nothing coded → single sheet, no highlights', async () => {
     const { rawdata, codebook } = saFixture()
     const calls = await captureStyleWrites(() => exportCodedData(rawdata, { sheets: [] }, codebook, 'plain.xlsx'))

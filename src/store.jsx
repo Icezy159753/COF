@@ -1,6 +1,6 @@
 /* eslint-disable react-refresh/only-export-components, react-hooks/set-state-in-effect */
 import { createContext, useContext, useEffect, useRef, useState } from 'react'
-import { collection, doc, getDoc, getDocs, setDoc, deleteDoc, writeBatch, Bytes } from 'firebase/firestore'
+import { collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, writeBatch, Bytes, onSnapshot } from 'firebase/firestore'
 import pako from 'pako'
 import { db } from './lib/firebase.js'
 import { isLocalUxPreview, useAuth } from './lib/auth.jsx'
@@ -114,6 +114,13 @@ function createUxPreviewData() {
 
 // cache ของ rawdata (ก้อนคำตอบ) ที่โหลดจาก Firestore — กันโหลดซ้ำเวลาเปลี่ยนหน้า (key = projectId)
 const rawdataCache = new Map()
+// rawMeta.updatedAt ของข้อมูลที่อยู่ใน cache — ถ้าเอกสารโปรเจกต์ (realtime) บอกเวอร์ชันใหม่กว่า = มีคนอื่นแก้ → โหลดใหม่
+const rawdataCacheVer = new Map()
+const setRawdataCache = (projectId, data, ver) => {
+  rawdataCache.set(projectId, data)
+  if (ver) rawdataCacheVer.set(projectId, ver)
+  else rawdataCacheVer.delete(projectId)
+}
 const originalRawdataCache = new Map()
 const rawdataUndoCache = new Map()
 
@@ -431,6 +438,65 @@ export function StoreProvider({ children }) {
     }
   }, [user?.uid, isAdmin, uxPreview])
 
+  // ---------- Realtime: โปรเจกต์ + Codeframe ที่คนอื่น (หรือแท็บอื่น) แก้ → อัปเดตหน้าทันที ----------
+  //   ข้ามการเปลี่ยนแปลงที่มาจากเครื่องนี้เอง (hasPendingWrites) · Rawdata โหลดใหม่เองเมื่อ rawMeta.updatedAt เปลี่ยน (useRawdata)
+  useEffect(() => {
+    if (uxPreview || !ready || !user?.uid) return undefined
+    const canSee = (p) => isAdmin || p.ownerUid === user.uid || (p.sharedWithUids ?? []).includes(user.uid)
+    let first = { p: true, c: true }
+    const unsubP = onSnapshot(collection(db, 'projects'), (snap) => {
+      if (first.p) { first.p = false; return } // รอบแรก = ข้อมูลที่โหลดไปแล้ว
+      for (const ch of snap.docChanges()) {
+        if (ch.doc.metadata.hasPendingWrites) continue
+        const id = ch.doc.id
+        if (ch.type === 'removed') {
+          setState((s) => ({ ...s, projects: s.projects.filter((p) => p.id !== id) }))
+          continue
+        }
+        const incoming = withBoxes(ch.doc.data())
+        if (!canSee(incoming)) {
+          setState((s) => ({ ...s, projects: s.projects.filter((p) => p.id !== id) }))
+          continue
+        }
+        const prev = stateRef.current.projects.find((p) => p.id === id)
+        const sameCodebook = prev?.codebook && (prev.codebookMeta?.chunkCount ?? 0) === (incoming.codebookMeta?.chunkCount ?? 0)
+          && (prev.codebookMeta?.updatedAt ?? 0) === (incoming.codebookMeta?.updatedAt ?? 0)
+        const merged = sameCodebook && !incoming.codebook ? { ...incoming, codebook: prev.codebook } : incoming
+        setState((s) => ({
+          ...s,
+          projects: s.projects.some((p) => p.id === id)
+            ? s.projects.map((p) => (p.id === id ? merged : p))
+            : [merged, ...s.projects],
+        }))
+        if (!merged.codebook && merged.codebookMeta?.chunkCount) {
+          readCodebookChunks(id, merged.codebookMeta.chunkCount)
+            .then((codebook) => setState((s) => ({ ...s, projects: s.projects.map((p) => (p.id === id ? { ...p, codebook } : p)) })))
+            .catch(() => { /* ปล่อยว่าง */ })
+        }
+      }
+    }, (err) => console.warn('[firebase] realtime projects listener stopped', err))
+    const unsubC = onSnapshot(collection(db, 'codeframes'), (snap) => {
+      if (first.c) { first.c = false; return }
+      for (const ch of snap.docChanges()) {
+        if (ch.doc.metadata.hasPendingWrites) continue
+        const id = ch.doc.id
+        if (ch.type === 'removed') {
+          setState((s) => ({ ...s, codeframes: s.codeframes.filter((c) => c.id !== id) }))
+          continue
+        }
+        const cf = cfFromDoc(ch.doc.data())
+        if (!stateRef.current.projects.some((p) => p.id === cf.projectId)) continue
+        setState((s) => ({
+          ...s,
+          codeframes: s.codeframes.some((c) => c.id === cf.id)
+            ? s.codeframes.map((c) => (c.id === cf.id ? cf : c))
+            : [cf, ...s.codeframes],
+        }))
+      }
+    }, (err) => console.warn('[firebase] realtime codeframes listener stopped', err))
+    return () => { unsubP(); unsubC() }
+  }, [ready, user?.uid, isAdmin, uxPreview])
+
   // ---------- ตัวช่วยบันทึก ----------
   // ถ้า codebook ถูกเก็บแบบ chunk แล้ว (มี codebookMeta) → ตัด codebook ออกจากเอกสาร (กัน doc โต)
   //   ของเก่าที่ยังเก็บ inline (ไม่มี codebookMeta) → เก็บ codebook ในเอกสารเหมือนเดิม (ไม่ทำให้หาย)
@@ -442,6 +508,11 @@ export function StoreProvider({ children }) {
       toSave = rest
     }
     return setDoc(doc(db, 'projects', p.id), toSave).catch(reportPersistError)
+  }
+  // อัปเดตเฉพาะบางฟิลด์ของเอกสารโปรเจกต์ (กันเขียนทับสิ่งที่คนอื่นเพิ่งแก้ในฟิลด์อื่น — สำคัญเมื่อซิงก์ realtime)
+  const persistProjectFields = (id, fields) => {
+    if (uxPreview) return Promise.resolve()
+    return updateDoc(doc(db, 'projects', id), fields).catch(reportPersistError)
   }
 
   // codeframe ถูกแก้บ่อย (พิมพ์ทีละตัวอักษร) → debounce การเขียนขึ้น Firestore
@@ -502,7 +573,7 @@ export function StoreProvider({ children }) {
       const boxes = withBoxes(cur).boxes
       const updated = { ...cur, boxes: { ...boxes, [box]: { ...boxes[box], ...patch } } }
       setState((s) => ({ ...s, projects: s.projects.map((p) => (p.id === id ? updated : p)) }))
-      persistProject(updated)
+      persistProjectFields(id, { [`boxes.${box}`]: updated.boxes[box] })
     },
     // เก็บ codebook (Value Label จาก .sav) — บีบอัด+ซอย chunk แยกจากเอกสารโปรเจกต์ (กันเกิน 1MB)
     async setCodebook(id, codebook) {
@@ -589,7 +660,7 @@ export function StoreProvider({ children }) {
       }
 
       // อัปเดต UI/cache ทันที เพื่อให้แก้ Verbatim ต่อได้โดยไม่ต้องรอ Firebase
-      rawdataCache.set(projectId, rawdata)
+      setRawdataCache(projectId, rawdata, optimisticMeta.updatedAt)
       if (cur) {
         const optimistic = { ...cur, rawMeta: optimisticMeta }
         setState((s) => ({ ...s, projects: s.projects.map((p) => (p.id === projectId ? optimistic : p)) }))
@@ -647,10 +718,11 @@ export function StoreProvider({ children }) {
           updatedAt: Date.now(),
           ...(uxPreview ? { rawdata } : {}),
         }
+        if (rawdataCache.get(projectId) === rawdata) rawdataCacheVer.set(projectId, meta.updatedAt)
         if (latest) {
           const updated = { ...latest, rawMeta: meta }
           setState((s) => ({ ...s, projects: s.projects.map((p) => (p.id === projectId ? updated : p)) }))
-          persistProject(updated)
+          persistProjectFields(projectId, { rawMeta: meta })
         }
       })
     },
@@ -686,9 +758,26 @@ export function StoreProvider({ children }) {
         return project.rawMeta.rawdata
       }
       if (!project?.rawMeta || (project.rawMeta.chunkCount ?? 0) <= 0) return null
+      const ver = project.rawMeta.updatedAt ?? 0
       const rawdata = await readRawdataChunks(projectId, project.rawMeta.chunkCount ?? 0)
-      if (rawdata) rawdataCache.set(projectId, rawdata)
+      if (rawdata) setRawdataCache(projectId, rawdata, ver)
       return rawdata
+    },
+    // แก้เฉพาะเซลล์ (cells = [{ r, c, next }]) บน Rawdata ล่าสุด — CE กับ Verbatim แก้คนละจุดจะไม่ทับกัน
+    async patchRawdata(projectId, cells, options = {}) {
+      if (!cells?.length) return
+      const base = rawdataCache.get(projectId) ?? (await api.loadRawdata(projectId))
+      if (!base) throw new Error('ไม่พบ Rawdata ของโปรเจกต์นี้')
+      const rows = (base.rows ?? []).slice()
+      const copied = new Set()
+      for (const cell of cells) {
+        const r = Number(cell.r)
+        const c = Number(cell.c)
+        if (!Number.isInteger(r) || !Number.isInteger(c) || !rows[r]) continue
+        if (!copied.has(r)) { rows[r] = rows[r].slice(); copied.add(r) }
+        rows[r][c] = String(cell.next ?? '')
+      }
+      return api.setRawdata(projectId, { ...base, rows }, { updateOriginal: false, ...options })
     },
     async loadOriginalRawdata(projectId) {
       const project = stateRef.current.projects.find((p) => p.id === projectId)
@@ -719,7 +808,7 @@ export function StoreProvider({ children }) {
       const latest = stateRef.current.projects.find((p) => p.id === projectId) ?? project
       const fastUpdatedAt = Math.max(Number(latest.rawMeta?.updatedAt ?? 0) + 1, Number(undoMeta.createdAt ?? 0))
       const updated = { ...latest, rawMeta: { ...(latest.rawMeta ?? {}), undoStack: nextStack, redoStack: nextRedoStack, updatedAt: fastUpdatedAt } }
-      rawdataCache.set(projectId, { ...rawdata, rows })
+      setRawdataCache(projectId, { ...rawdata, rows }, fastUpdatedAt)
       setState((s) => ({ ...s, projects: s.projects.map((p) => (p.id === projectId ? updated : p)) }))
       api.setRawdata(projectId, { ...rawdata, rows }, { updateOriginal: false })
         .catch(reportPersistError)
@@ -756,7 +845,7 @@ export function StoreProvider({ children }) {
       const latest = stateRef.current.projects.find((p) => p.id === projectId) ?? project
       const fastUpdatedAt = Math.max(Number(latest.rawMeta?.updatedAt ?? 0) + 1, Number(redoMeta.createdAt ?? 0))
       const updated = { ...latest, rawMeta: { ...(latest.rawMeta ?? {}), undoStack: nextUndoStack, redoStack: nextRedoStack, updatedAt: fastUpdatedAt } }
-      rawdataCache.set(projectId, { ...rawdata, rows })
+      setRawdataCache(projectId, { ...rawdata, rows }, fastUpdatedAt)
       setState((s) => ({ ...s, projects: s.projects.map((p) => (p.id === projectId ? updated : p)) }))
       api.setRawdata(projectId, { ...rawdata, rows }, { updateOriginal: false })
         .catch(reportPersistError)
@@ -887,10 +976,16 @@ export function useRawdata(projectId) {
       setLoading(false)
       return
     }
-    if (!reloadTick && rawdataCache.has(projectId)) {
+    // ใช้ cache ได้ถ้าเป็นเวอร์ชันเดียวกับเอกสารโปรเจกต์ (realtime) — ไม่งั้นมีคนอื่นแก้ ต้องโหลดใหม่
+    const cachedVer = rawdataCacheVer.get(projectId)
+    if (!reloadTick && rawdataCache.has(projectId) && (cachedVer == null || !version || cachedVer === version)) {
       setRawdata(rawdataCache.get(projectId))
       setLoading(false)
       return
+    }
+    if (rawdataCache.has(projectId) && cachedVer != null && version && cachedVer !== version) {
+      rawdataCache.delete(projectId)
+      rawdataCacheVer.delete(projectId)
     }
     if (reloadTick) rawdataCache.delete(projectId)
     setLoading(true)

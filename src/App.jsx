@@ -14,6 +14,7 @@ const BoxPage = lazy(() => import('./pages/BoxPage.jsx'))
 const CodeframeEditor = lazy(() => import('./pages/CodeframeEditor.jsx'))
 const RawdataViewer = lazy(() => import('./pages/RawdataViewer.jsx'))
 const VerbatimEditor = lazy(() => import('./pages/VerbatimEditor.jsx'))
+const VerbatimHub = lazy(() => import('./pages/VerbatimHub.jsx'))
 
 const ROLE_LABEL = { superadmin: 'SuperAdmin', admin: 'Admin', member: 'Member' }
 
@@ -154,7 +155,8 @@ export default function App() {
           <Route path="/ai-providers" element={<AiProviders />} />
           <Route path="/projects/:projectId" element={<ProjectHub />} />
           <Route path="/projects/:projectId/rawdata" element={<RawdataViewer />} />
-          <Route path="/projects/:projectId/verbatim" element={<VerbatimEditor />} />
+          <Route path="/projects/:projectId/verbatim" element={<VerbatimHub />} />
+          <Route path="/projects/:projectId/verbatim/edit" element={<VerbatimEditor />} />
           <Route path="/projects/:projectId/:box" element={<BoxPage />} />
           <Route
             path="/projects/:projectId/:box/codeframes/:codeframeId"

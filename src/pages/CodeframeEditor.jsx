@@ -247,7 +247,7 @@ function CodeCell({ editing, value, placeholder, mono, onStart, onChange, onStop
 
 export default function CodeframeEditor() {
   const { projectId, box, codeframeId } = useParams()
-  const { state, updateCodeframe, setRawdata, restoreRawdataUndo, restoreRawdataRedo } = useStore()
+  const { state, updateCodeframe, patchRawdata, loadOriginalRawdata, restoreRawdataUndo, restoreRawdataRedo } = useStore()
   const project = state.projects.find((p) => p.id === projectId)
   const cf = state.codeframes.find((c) => c.id === codeframeId)
   const { rawdata, loading: rawLoading, error: rawError, reload: reloadRawdata } = useRawdata(projectId)
@@ -1752,7 +1752,7 @@ export default function CodeframeEditor() {
     setEditingAnswer(null)
     setPopupEditingAnswer(null)
     const undoSnapshot = buildRawdataUndoSnapshot(rawdata, rows, 'edit_verbatim', `แก้ Verbatim → ${newText}`)
-    setRawdata(projectId, { ...rawdata, rows }, { updateOriginal: false, undoSnapshot }).catch((err) => {
+    stampRawdataCells(undoSnapshot).catch((err) => {
       setToast({ type: 'warning', title: 'ซิงก์ Rawdata ไป Firebase ไม่สำเร็จ', message: err.message, duration: 8000 })
     })
   }
@@ -1816,6 +1816,11 @@ export default function CodeframeEditor() {
     }
     return changedCols
   }
+
+  // Stamp เฉพาะเซลล์ที่แก้ลง Rawdata ชุดเดียวกับกล่อง Verbatim (บน Rawdata ล่าสุด ไม่ทับจุดที่คนอื่นแก้)
+  const stampRawdataCells = (undoSnapshot) => (undoSnapshot
+    ? patchRawdata(projectId, undoSnapshot.cells, { undoSnapshot })
+    : Promise.resolve())
 
   const buildRawdataUndoSnapshot = (beforeRawdata, afterRows, kind, title) => {
     const cells = []
@@ -2032,7 +2037,7 @@ export default function CodeframeEditor() {
       'delete_verbatim',
       texts.length === 1 ? `ลบ Verbatim: ${texts[0]}` : `ลบ Verbatim ${texts.length} รายการ`,
     )
-    setRawdata(projectId, { ...rawdata, rows }, { updateOriginal: false, undoSnapshot }).catch((err) => {
+    stampRawdataCells(undoSnapshot).catch((err) => {
       setToast({ type: 'warning', title: 'ซิงก์ Rawdata ไม่สำเร็จ', message: err.message, duration: 8000 })
     })
   }
@@ -2328,7 +2333,7 @@ export default function CodeframeEditor() {
     setSelectedPopupAnswerKeys((prev) => new Set([...prev, member.key]))
     setLastPopupAnswerKey(member.key)
     const undoSnapshot = buildRawdataUndoSnapshot(rawdata, rows, 'split_verbatim', `แยก Verbatim กลับ: ${member.key}`)
-    setRawdata(projectId, { ...rawdata, rows }, { updateOriginal: false, undoSnapshot }).catch((err) => {
+    stampRawdataCells(undoSnapshot).catch((err) => {
       setToast({ type: 'warning', title: 'ซิงก์ Rawdata ไป Firebase ไม่สำเร็จ', message: err.message, duration: 8000 })
     })
     setToast({ type: 'success', title: 'แยก Verbatim ออกมาแล้ว', message: `คืน “${member.key}” ${restored} rows`, duration: 2600 })
@@ -2702,7 +2707,12 @@ export default function CodeframeEditor() {
         return
       }
       const base = (project.rawMeta?.fileName ?? project.name ?? 'rawdata').replace(/\.(xlsx|xls|csv)$/i, '')
-      await exportCodedData(rawdata, cf, project.codebook, `${base}_coded.xlsx`)
+      // ต้นฉบับ → ไฮไลต์จุดที่แก้ข้อความ (กล่อง Verbatim / หน้านี้) ในไฟล์เดียวกับจุดลง Code
+      let original = null
+      if ((project.rawMeta?.originalChunkCount ?? 0) > 0) {
+        try { original = await loadOriginalRawdata(projectId) } catch (err) { console.warn('load original rawdata for export failed', err) }
+      }
+      await exportCodedData(rawdata, cf, project.codebook, `${base}_coded.xlsx`, { original, verbatimCfg: project.boxes?.verbatim })
     } catch (err) {
       setToast({ type: 'warning', title: 'Export Data ไม่สำเร็จ', message: err.message, duration: 8000 })
     }

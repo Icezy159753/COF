@@ -5,20 +5,19 @@ import fs from 'node:fs'
 const editor = fs.readFileSync(new URL('../src/pages/CodeframeEditor.jsx', import.meta.url), 'utf8')
 const store = fs.readFileSync(new URL('../src/store.jsx', import.meta.url), 'utf8')
 
+// CE แก้ Rawdata ผ่าน stampRawdataCells → store.patchRawdata (เขียนเฉพาะเซลล์ที่แก้ บน Rawdata ล่าสุด)
+const stampCalls = [...editor.matchAll(/stampRawdataCells\(undoSnapshot\)\.catch/g)]
+
 test('CodeframeEditor rawdata edits do not overwrite original rawdata baseline', () => {
-  const calls = [...editor.matchAll(/setRawdata\(projectId,\s*\{\s*\.\.\.rawdata,\s*rows\s*\}([^\n]*)/g)].map((m) => m[0])
-  assert.ok(calls.length >= 3, 'expected edit/delete/split Verbatim rawdata save calls')
-  for (const call of calls) {
-    assert.match(call, /updateOriginal:\s*false/, `missing updateOriginal:false in ${call}`)
-  }
+  assert.ok(stampCalls.length >= 3, 'expected edit/delete/split Verbatim rawdata save calls')
+  assert.doesNotMatch(editor, /setRawdata\(projectId,\s*\{\s*\.\.\.rawdata,\s*rows\s*\}/, 'whole-rawdata writes would clobber Verbatim-box edits')
+  // patchRawdata บังคับ updateOriginal: false (ไม่แตะต้นฉบับ)
+  assert.match(store, /async patchRawdata\(projectId, cells, options = \{\}\)[\s\S]*?updateOriginal: false, \.\.\.options/)
 })
 
 test('CodeframeEditor rawdata edit paths send undo snapshots', () => {
-  const calls = [...editor.matchAll(/setRawdata\(projectId,\s*\{\s*\.\.\.rawdata,\s*rows\s*\}([^\n]*)/g)].map((m) => m[0])
-  assert.ok(calls.length >= 3, 'expected edit/delete/split Verbatim rawdata save calls')
-  for (const call of calls) {
-    assert.match(call, /undoSnapshot/, `missing undoSnapshot in ${call}`)
-  }
+  assert.ok(stampCalls.length >= 3, 'expected edit/delete/split Verbatim rawdata save calls')
+  assert.match(editor, /const stampRawdataCells = \(undoSnapshot\) => \(undoSnapshot\s*\? patchRawdata\(projectId, undoSnapshot\.cells, \{ undoSnapshot \}\)/)
 })
 
 test('CodeframeEditor delete Verbatim with code-specific _oth does not fallback-clear other codes like 13', () => {
