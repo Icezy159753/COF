@@ -1,8 +1,8 @@
 name: Deploy Codeframe Studio to Firebase Hosting
 
+# deploy เฉพาะตอนกดสั่งเอง (Actions → Run workflow) — ไม่ deploy อัตโนมัติเมื่อ push
+# ขั้นตอน deploy หลักยังเป็น firebase CLI ที่ตรวจไฟล์ production หลัง deploy
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -38,6 +38,8 @@ jobs:
           VITE_FIREBASE_MESSAGING_SENDER_ID: '724384258806'
           VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
           VITE_FIREBASE_MEASUREMENT_ID: ${{ secrets.VITE_FIREBASE_MEASUREMENT_ID }}
+          # AI backend (ai-runner ผ่าน Cloudflare Tunnel) — ถ้าไม่ใส่ หน้าเว็บจะเรียก /api บน Hosting แล้ว AI ใช้ไม่ได้
+          VITE_AI_API_BASE: https://ai.dpdata-tools.com
 
       - name: Deploy to Firebase Hosting
         uses: FirebaseExtended/action-hosting-deploy@v0
