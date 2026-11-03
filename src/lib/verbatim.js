@@ -38,8 +38,10 @@ export function makeOrigRowAt(origData, sbjQ) {
   }
 }
 
-// สถานะของ 1 เซลล์: '' (ว่าง) | 'human' | 'ai' | 'hok' (คนดูแล้ว OK) | 'ok' (AI ตรวจแล้ว OK) | 'pending' | 'locked' (ข้อหลายคอลัมน์ที่แก้ไม่ได้)
-export function cellStatus(q, orig, clean, aiOk, aiFixed, humanOk) {
+// สถานะของ 1 เซลล์: '' (ว่าง) | 'human' | 'ai' | 'hok' (คนดูแล้ว OK) | 'flag' (AI ให้คนเช็ค: มั่ว/ไม่ได้ใจความ)
+//   | 'ok' (AI ตรวจแล้ว OK) | 'pending' | 'locked' (ข้อหลายคอลัมน์ที่แก้ไม่ได้)
+// aiFlag = Set หรือ Map ของ textKey ที่ AI ชี้ให้คนเช็ค
+export function cellStatus(q, orig, clean, aiOk, aiFixed, humanOk, aiFlag) {
   if (!orig && !clean) return ''
   if (orig !== clean) return aiFixed?.has(textKey(q.index, clean)) ? 'ai' : 'human'
   if (!isEditable(q)) return 'locked'
@@ -47,22 +49,23 @@ export function cellStatus(q, orig, clean, aiOk, aiFixed, humanOk) {
   // ข้อความที่ AI ตรวจแล้ว OK หรือเป็นข้อความที่ AI แก้ให้แล้ว (เช่น ไม่มีสำเนาต้นฉบับให้เทียบ) = ตรวจแล้ว
   const k = textKey(q.index, clean)
   if (humanOk?.has(k)) return 'hok' // คนดูแล้ว (เช่น วางทั้งคอลัมน์กลับมาแล้วข้อความเหมือนต้นฉบับ)
+  if (aiFlag?.has(k)) return 'flag' // AI ดูแล้วว่าตอบมั่ว/อ่านไม่ออก → รอคนเช็ค (ยังไม่นับว่าครบ)
   return aiOk?.has(k) || aiFixed?.has(k) ? 'ok' : 'pending'
 }
 
-// สรุปต่อข้อ: { answered, human, ai, hok, ok, pending, locked, done }
-export function computeVerbatimStats({ rows, qs, origRowAt, aiOk, aiFixed, humanOk }) {
+// สรุปต่อข้อ: { answered, human, ai, hok, ok, flag, pending, locked, done } — ครบ = ไม่มีทั้งค้างตรวจและรอคนเช็ค
+export function computeVerbatimStats({ rows, qs, origRowAt, aiOk, aiFixed, humanOk, aiFlag }) {
   const out = new Map()
   for (const q of qs) {
-    const s = { answered: 0, human: 0, ai: 0, hok: 0, ok: 0, pending: 0, locked: 0 }
+    const s = { answered: 0, human: 0, ai: 0, hok: 0, ok: 0, flag: 0, pending: 0, locked: 0 }
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i]
-      const st = cellStatus(q, cellValue(origRowAt(row, i), q), cellValue(row, q), aiOk, aiFixed, humanOk)
+      const st = cellStatus(q, cellValue(origRowAt(row, i), q), cellValue(row, q), aiOk, aiFixed, humanOk, aiFlag)
       if (!st) continue
       s.answered++
       s[st]++
     }
-    s.done = s.pending === 0
+    s.done = s.pending === 0 && s.flag === 0
     out.set(q.id, s)
   }
   return out

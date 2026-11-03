@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { ArrowLeft, Cpu, Check, Loader2, Sparkles, KeyRound, RefreshCw, Gift } from 'lucide-react'
 import { useStore } from '../store.jsx'
 import { useAuth } from '../lib/auth.jsx'
-import { DEFAULT_AI_CONFIG, toAiPayload, aiTestConnection, fetchOpenRouterModels } from '../lib/aiGroup.js'
+import { DEFAULT_AI_CONFIG, toAiPayload, aiTestConnection, fetchOpenRouterModels, fetchOmniRouteModels } from '../lib/aiGroup.js'
 
 const CLAUDE_MODELS = [
   { id: 'sonnet', label: 'Sonnet (สมดุล คุณภาพ/ความเร็ว)' },
@@ -101,6 +101,22 @@ export default function AiProviders() {
   const [loadingModels, setLoadingModels] = useState(false)
   const [modelsErr, setModelsErr] = useState('')
   const [freeOnly, setFreeOnly] = useState(false)
+  const [omniModels, setOmniModels] = useState(null) // null | [{id,name}]
+  const [loadingOmni, setLoadingOmni] = useState(false)
+  const [omniErr, setOmniErr] = useState('')
+  const loadOmniModels = async () => {
+    setLoadingOmni(true)
+    setOmniErr('')
+    try {
+      setOmniModels(await fetchOmniRouteModels())
+    } catch (e) {
+      setOmniErr(/OMNIROUTE_API_KEY/.test(e.message || '')
+        ? 'ยังไม่ได้ตั้ง OmniRoute API Key ที่ server (OMNIROUTE_API_KEY) — แจ้งผู้ดูแล runner'
+        : e.message || 'โหลดไม่สำเร็จ')
+    } finally {
+      setLoadingOmni(false)
+    }
+  }
 
   const recommendedFree = useMemo(() => (models ? recommendFree(models) : []), [models])
   const freeCount = useMemo(() => (models ? models.filter((m) => m.free).length : 0), [models])
@@ -172,7 +188,7 @@ export default function AiProviders() {
 
 
       {/* เลือก Provider */}
-      <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
         <ProviderCard
           id="claude"
           name="Claude (Subscription)"
@@ -196,6 +212,14 @@ export default function AiProviders() {
           active={form.provider === 'openrouter'}
           onSelect={(id) => set({ provider: id })}
         />
+        <ProviderCard
+          id="omniroute"
+          name="OmniRoute"
+          desc="AI Gateway ที่ติดตั้งบนเครื่อง runner รวมหลาย Provider ไว้ที่เดียว (OpenAI-compatible) — key ตั้งที่ server ไม่ต้องกรอกในเว็บ"
+          badge="Global"
+          active={form.provider === 'omniroute'}
+          onSelect={(id) => set({ provider: id })}
+        />
       </div>
 
       {/* ตั้งค่าตาม Provider ที่เลือก */}
@@ -217,6 +241,41 @@ export default function AiProviders() {
             <p className="mt-2 text-[12px] text-slate-400">
               ใช้สิทธิ์ subscription/CLI กลางที่ Admin ตั้งไว้ ค่า model นี้จะมีผลกับงาน AI ของทุก user
             </p>
+          </div>
+        ) : form.provider === 'omniroute' ? (
+          <div>
+            <div className="mb-1.5 flex items-center justify-between gap-2">
+              <label className="text-[13px] font-semibold text-slate-700">โมเดล OmniRoute</label>
+              <button
+                type="button"
+                onClick={loadOmniModels}
+                disabled={loadingOmni}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1 text-[12px] font-semibold text-indigo-600 transition hover:bg-indigo-50 disabled:opacity-50"
+              >
+                {loadingOmni ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+                {omniModels ? `โหลดแล้ว ${omniModels.length} รุ่น` : 'โหลดรายชื่อโมเดล'}
+              </button>
+            </div>
+            <input
+              list="omni-models"
+              value={form.omnirouteModel}
+              onChange={(e) => set({ omnirouteModel: e.target.value })}
+              placeholder="model id หรือชื่อ combo ใน OmniRoute เช่น kr/claude-sonnet-4.5"
+              className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 font-mono text-sm outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+            />
+            <datalist id="omni-models">
+              {(omniModels ?? []).map((m) => (
+                <option key={m.id} value={m.id} />
+              ))}
+            </datalist>
+            {omniErr ? (
+              <p className="mt-1.5 text-[12px] text-rose-500">{omniErr}</p>
+            ) : (
+              <p className="mt-1.5 text-[12px] text-slate-400">
+                กด “โหลดรายชื่อโมเดล” เพื่อดึงรุ่น/combo ที่เปิดไว้ใน OmniRoute หรือพิมพ์ model id เอง — API Key และ URL ของ OmniRoute
+                ตั้งไว้ที่ server (<span className="font-mono">OMNIROUTE_API_KEY</span>, <span className="font-mono">OMNIROUTE_BASE_URL</span>) ไม่ถูกเก็บในเว็บ
+              </p>
+            )}
           </div>
         ) : form.provider === 'codex' ? (
           <div>

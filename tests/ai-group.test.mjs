@@ -65,7 +65,7 @@ const POST_CASES = [
     '/api/ai-review',
     { verbatims: [{ text: 'ส่งช้า', count: 1, current: ['บริการ'] }] },
   ],
-  ['aiSpellcheck', [[{ i: 0, text: 'อร่อยมากก' }]], '/api/ai-spellcheck', { items: [{ i: 0, text: 'อร่อยมากก' }] }],
+  ['aiSpellcheck', [[{ i: 0, text: 'อร่อยมากก' }], 'ชอบอะไร'], '/api/ai-spellcheck', { items: [{ i: 0, text: 'อร่อยมากก' }], question: 'ชอบอะไร' }],
   [
     'aiAssignToFrame',
     [[{ i: 0, label: 'ราคา' }], [{ i: 0, text: 'แพงไป', count: 4 }]],
@@ -102,8 +102,8 @@ describe('module loading', () => {
 })
 
 describe('constants', () => {
-  test('AI_PROVIDERS lists the three supported providers in order', () => {
-    assert.deepEqual(ai.AI_PROVIDERS, ['claude', 'openrouter', 'codex'])
+  test('AI_PROVIDERS lists the supported providers in order', () => {
+    assert.deepEqual(ai.AI_PROVIDERS, ['claude', 'openrouter', 'codex', 'omniroute'])
   })
 
   test('DEFAULT_AI_CONFIG snapshot', () => {
@@ -113,7 +113,13 @@ describe('constants', () => {
       openrouterApiKey: '',
       openrouterModel: 'qwen/qwen3-235b-a22b-2507',
       codexModel: '',
+      omnirouteModel: '',
     })
+  })
+
+  test('toAiPayload: omniroute sends only provider + model (key stays on the server)', () => {
+    assert.deepEqual(ai.toAiPayload({ provider: 'omniroute', omnirouteModel: 'kr/claude-sonnet-4.5', openrouterApiKey: 'x' }), { provider: 'omniroute', model: 'kr/claude-sonnet-4.5' })
+    assert.deepEqual(ai.toAiPayload({ provider: 'omniroute' }), { provider: 'omniroute', model: undefined })
   })
 
   test('DEFAULT_AI_CONFIG provider is one of AI_PROVIDERS', () => {

@@ -52,6 +52,11 @@ describe('verbatim helpers', () => {
     assert.equal(cellStatus(Q1, 'fixed', 'fixed', aiOk, aiFixed), 'ok')
     // คนดูแล้ว (วางทั้งคอลัมน์กลับมาเหมือนต้นฉบับ) → Human ดูแล้ว OK และไม่ค้าง
     assert.equal(cellStatus(Q1, 'other', 'other', aiOk, aiFixed, new Set([textKey(1, 'other')])), 'hok')
+    // AI ชี้ว่ามั่ว/ไม่ได้ใจความ → รอคนเช็ค · คนกด OK แล้ว → Human ดูแล้ว OK · คนแก้ข้อความ → Human แก้
+    const aiFlag = new Map([[textKey(1, 'ฟหกดฟหก'), 'พิมพ์มั่ว']])
+    assert.equal(cellStatus(Q1, 'ฟหกดฟหก', 'ฟหกดฟหก', aiOk, aiFixed, new Set(), aiFlag), 'flag')
+    assert.equal(cellStatus(Q1, 'ฟหกดฟหก', 'ฟหกดฟหก', aiOk, aiFixed, new Set([textKey(1, 'ฟหกดฟหก')]), aiFlag), 'hok')
+    assert.equal(cellStatus(Q1, 'ฟหกดฟหก', 'ไม่ระบุ', aiOk, aiFixed, new Set(), aiFlag), 'human')
   })
 
   test('TSV column round-trips Excel-style quoting (newline, tab, quotes, empty)', () => {
@@ -72,8 +77,9 @@ describe('verbatim helpers', () => {
       origRowAt: makeOrigRowAt(orig, SBJ),
       aiOk: new Set([textKey(1, 'aa'), textKey(1, 'bb'), textKey(2, 'y')]),
       aiFixed: new Set([textKey(2, 'x!')]),
+      aiFlag: new Map([[textKey(2, 'z'), 'ไม่ได้ใจความ']]),
     })
-    assert.deepEqual(stats.get('q1'), { answered: 2, human: 0, ai: 0, hok: 0, ok: 2, pending: 0, locked: 0, done: true })
-    assert.deepEqual(stats.get('q2'), { answered: 3, human: 0, ai: 1, hok: 0, ok: 1, pending: 1, locked: 0, done: false })
+    assert.deepEqual(stats.get('q1'), { answered: 2, human: 0, ai: 0, hok: 0, ok: 2, flag: 0, pending: 0, locked: 0, done: true })
+    assert.deepEqual(stats.get('q2'), { answered: 3, human: 0, ai: 1, hok: 0, ok: 1, flag: 1, pending: 0, locked: 0, done: false })
   })
 })

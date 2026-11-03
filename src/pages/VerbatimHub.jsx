@@ -16,6 +16,7 @@ const SEGMENTS = [
   { key: 'hok', label: 'Human ดูแล้ว OK', bar: 'bg-teal-400', dot: 'bg-teal-400' },
   { key: 'ai', label: 'AI แก้', bar: 'bg-violet-500', dot: 'bg-violet-500' },
   { key: 'ok', label: 'AI ตรวจแล้ว OK', bar: 'bg-sky-400', dot: 'bg-sky-400' },
+  { key: 'flag', label: 'AI ให้คนเช็ค', bar: 'bg-rose-400', dot: 'bg-rose-400' },
   { key: 'pending', label: 'ยังไม่ตรวจ', bar: 'bg-orange-300', dot: 'bg-orange-400' },
 ]
 const fmt = (n) => n.toLocaleString('th-TH')
@@ -69,19 +70,21 @@ export default function VerbatimHub() {
       aiOk: new Set(cfg?.aiOk ?? []),
       aiFixed: new Set(cfg?.aiFixed ?? []),
       humanOk: new Set(cfg?.humanOk ?? []),
+      aiFlag: new Map(Object.entries(cfg?.aiFlag ?? {})),
     })
-  }, [rawdata, qs, origData, sbjQ?.id, cfg?.aiOk, cfg?.aiFixed, cfg?.humanOk])
+  }, [rawdata, qs, origData, sbjQ?.id, cfg?.aiOk, cfg?.aiFixed, cfg?.humanOk, cfg?.aiFlag])
 
   const total = useMemo(() => {
-    const t = { answered: 0, human: 0, ai: 0, hok: 0, ok: 0, pending: 0, locked: 0, doneQs: 0 }
+    const t = { answered: 0, human: 0, ai: 0, hok: 0, ok: 0, flag: 0, pending: 0, locked: 0, doneQs: 0 }
     for (const s of stats.values()) {
-      for (const k of ['answered', 'human', 'ai', 'hok', 'ok', 'pending', 'locked']) t[k] += s[k]
+      for (const k of ['answered', 'human', 'ai', 'hok', 'ok', 'flag', 'pending', 'locked']) t[k] += s[k]
       if (s.done) t.doneQs++
     }
     return t
   }, [stats])
   const reviewed = total.human + total.ai + total.hok + total.ok
-  const reviewable = reviewed + total.pending
+  const reviewable = reviewed + total.pending + total.flag
+  const left = total.pending + total.flag
   const pct = reviewable ? Math.round((reviewed / reviewable) * 100) : 0
   const nextPending = qs.find((q) => !stats.get(q.id)?.done)
 
@@ -167,7 +170,8 @@ export default function VerbatimHub() {
                   <div className="min-w-[14rem] flex-1">
                     <div className="flex flex-wrap items-center gap-1.5">
                       <p className="text-[11px] font-black uppercase tracking-[0.16em] text-amber-500">Progress</p>
-                      {total.pending ? <Badge color="amber">เหลือ {fmt(total.pending)} ช่อง</Badge> : <Badge color="emerald">ครบทุกข้อ ✓</Badge>}
+                      {left ? <Badge color="amber">เหลือ {fmt(left)} ช่อง</Badge> : <Badge color="emerald">ครบทุกข้อ ✓</Badge>}
+                      {total.flag > 0 && <Badge color="rose">AI ให้คนเช็ค {fmt(total.flag)}</Badge>}
                       <Badge color="emerald">ครบ {total.doneQs}/{qs.length} ข้อ</Badge>
                       <Badge color="slate">{fmt(rawdata?.rows?.length ?? 0)} แถว</Badge>
                     </div>
@@ -228,7 +232,7 @@ export default function VerbatimHub() {
 
               <div className="grid gap-3 md:grid-cols-2">
                 {qs.map((q) => {
-                  const s = stats.get(q.id) ?? { answered: 0, human: 0, ai: 0, hok: 0, ok: 0, pending: 0, locked: 0, done: true }
+                  const s = stats.get(q.id) ?? { answered: 0, human: 0, ai: 0, hok: 0, ok: 0, flag: 0, pending: 0, locked: 0, done: true }
                   return (
                     <Link
                       key={q.id}
@@ -251,7 +255,7 @@ export default function VerbatimHub() {
                           </span>
                         ) : (
                           <span className="inline-flex shrink-0 items-center rounded-full bg-orange-500 px-2.5 py-1 text-[11px] font-bold text-white">
-                            เหลือ {fmt(s.pending)}
+                            เหลือ {fmt(s.pending + s.flag)}
                           </span>
                         )}
                       </div>
@@ -262,6 +266,7 @@ export default function VerbatimHub() {
                         {s.hok > 0 && <Badge color="sky">Human OK {fmt(s.hok)}</Badge>}
                         {s.ai > 0 && <Badge color="violet">AI แก้ {fmt(s.ai)}</Badge>}
                         {s.ok > 0 && <Badge color="sky">AI OK {fmt(s.ok)}</Badge>}
+                        {s.flag > 0 && <Badge color="rose">ให้คนเช็ค {fmt(s.flag)}</Badge>}
                         {s.locked > 0 && <Badge color="slate">แก้ไม่ได้ (หลายคอลัมน์)</Badge>}
                         <ChevronRight size={16} className="ml-auto text-slate-300 group-hover:text-indigo-400" />
                       </div>
@@ -293,7 +298,7 @@ export default function VerbatimHub() {
 
 // แถบสัดส่วน Human / AI แก้ / AI OK / ยังไม่ตรวจ
 function StackBar({ s, className = '' }) {
-  const sum = s.human + s.hok + s.ai + s.ok + s.pending
+  const sum = s.human + s.hok + s.ai + s.ok + (s.flag ?? 0) + s.pending
   return (
     <div className={`flex w-full overflow-hidden rounded-full bg-slate-100 ${className}`}>
       {sum > 0 && SEGMENTS.map((seg) => (s[seg.key] > 0 ? (

@@ -538,6 +538,62 @@ function extractJson(text) {
   return JSON.parse(text.slice(start, end + 1))
 }
 
+// ---------- OmniRoute (AI gateway แบบ OpenAI-compatible ที่ติดตั้งบนเครื่อง runner) ----------
+// ตั้งค่าบน server เท่านั้น (env หรือไฟล์ ENV_FILE): OMNIROUTE_API_KEY, OMNIROUTE_BASE_URL (ค่าเริ่มต้น http://127.0.0.1:20128/v1)
+function omniRouteBase() {
+  return (loadEnvValue('OMNIROUTE_BASE_URL') || 'http://127.0.0.1:20128/v1').replace(/\/+$/, '')
+}
+async function callOmniRoute(prompt, ai = {}) {
+  const apiKey = loadEnvValue('OMNIROUTE_API_KEY')
+  if (!apiKey) throw new Error('OMNIROUTE_API_KEY is not configured on backend')
+  const model = String(ai.model || loadEnvValue('OMNIROUTE_MODEL') || '').trim()
+  if (!model) throw new Error('ยังไม่ได้เลือกโมเดลของ OmniRoute')
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
+  try {
+    const r = await fetch(`${omniRouteBase()}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'user', content: prompt },
+        ],
+        temperature: 0,
+        stream: false,
+      }),
+      signal: controller.signal,
+    })
+    if (!r.ok) {
+      const body = await r.text().catch(() => '')
+      throw new Error(`OmniRoute HTTP ${r.status}: ${body.slice(0, 300)}`)
+    }
+    const data = await r.json()
+    const out = data?.choices?.[0]?.message?.content
+    if (!out) throw new Error('OmniRoute returned no content')
+    return out
+  } catch (e) {
+    if (e.name === 'AbortError') throw new Error('OmniRoute timeout')
+    throw e
+  } finally {
+    clearTimeout(timer)
+  }
+}
+async function listOmniRouteModels() {
+  const apiKey = loadEnvValue('OMNIROUTE_API_KEY')
+  if (!apiKey) throw new Error('OMNIROUTE_API_KEY is not configured on backend')
+  const r = await fetch(`${omniRouteBase()}/models`, { headers: { Authorization: `Bearer ${apiKey}` } })
+  if (!r.ok) throw new Error(`OmniRoute HTTP ${r.status}`)
+  const data = await r.json()
+  return { models: (data?.data || []).map((m) => ({ id: String(m.id || ''), name: String(m.name || m.id || '') })).filter((m) => m.id).sort((a, b) => a.id.localeCompare(b.id)) }
+}
+
+// เลือกเส้นทางตาม provider ที่ Admin ตั้งไว้ (ค่าอื่น ๆ ใช้ OpenRouter เหมือนเดิม)
+function callAi(prompt, ai = {}) {
+  return ai?.provider === 'omniroute' ? callOmniRoute(prompt, ai) : callOpenRouter(prompt, ai)
+}
+
 async function callOpenRouter(prompt, ai = {}) {
   const requested = ai.model || DEFAULT_MODEL
   const candidates = [requested]
@@ -617,7 +673,7 @@ function normalizeGroup(parsed, count) {
 }
 async function handleGroup(body) {
   if (!Array.isArray(body.codes) || !body.codes.length) throw new Error('ไม่มีรหัสให้จัดกลุ่ม')
-  return normalizeGroup(extractJson(await callOpenRouter(buildGroupPrompt(body), body.ai || {})), body.codes.length)
+  return normalizeGroup(extractJson(await callAi(buildGroupPrompt(body), body.ai || {})), body.codes.length)
 }
 
 function buildCodePrompt(body) {
@@ -635,21 +691,26 @@ function normalizeCoding(parsed, count) {
 }
 async function handleCode(body) {
   if (!Array.isArray(body.verbatims) || !body.verbatims.length) throw new Error('ไม่มีคำตอบให้โค้ดดิ้ง')
-  return normalizeCoding(extractJson(await callOpenRouter(buildCodePrompt(body), body.ai || {})), body.verbatims.length)
+  return normalizeCoding(extractJson(await callAi(buildCodePrompt(body), body.ai || {})), body.verbatims.length)
 }
 async function handleReview(body) { return handleCode(body) }
 
 function buildSpellPrompt(body) {
   return promptHeader(
-    '{"fixes":[{"i":0,"fixed":"full corrected text","reason":"short Thai note"}]} You are a meticulous Thai proofreader for market-research verbatims. For each item fix ONLY spelling mistakes, wrong tone marks/vowels (e.g. รุ้สึก -> รู้สึก), accidental duplicated words and obvious typos. Do NOT rephrase, summarise, translate, change meaning, change slang/brand names, or add/remove content. Keep the original punctuation, slashes (/), dashes, line breaks and spacing style. "fixed" must be the whole corrected text. Include ONLY items that actually need a change; omit items that are already correct.',
-    { items: body.items || [] },
+    '{"fixes":[{"i":0,"fixed":"full corrected text","reason":"short Thai note"}],"flags":[{"i":3,"reason":"short Thai note"}]} You are a meticulous Thai proofreader for market-research verbatims (open-ended survey answers). Task 1 "fixes": for each item fix ONLY spelling mistakes, wrong tone marks/vowels (e.g. รุ้สึก -> รู้สึก), accidental duplicated words and obvious typos. Do NOT rephrase, summarise, translate, change meaning, change slang/brand names, or add/remove content. Keep intentional emphasis as typed (repeated letters like มากก/ดีมากกก, ๆ, 555, emoji). Keep the original punctuation, slashes (/), dashes, line breaks and spacing style. "fixed" must be the whole corrected text. Include ONLY items that actually need a change. Task 2 "flags": list items a human coder must review because the answer has no usable meaning: random keyboard mashing or gibberish (e.g. "asdfgh", "ฟหกดฟหก"), unreadable broken text, a sentence that cannot be understood, or (when "question" is given) an answer clearly unrelated to the question. Do NOT flag short but meaningful answers (e.g. "ไม่มี", "ไม่ทราบ", "ราคาถูก", "อร่อย", a brand name), slang, or answers with only spelling mistakes. A flagged item must NOT appear in fixes. Items that are fine go in neither list. reason = short Thai explanation (e.g. "พิมพ์มั่ว อ่านไม่ออก", "ไม่ได้ใจความ", "ตอบไม่ตรงคำถาม").',
+    { question: String(body.question || '').slice(0, 500), items: body.items || [] },
   )
 }
 async function handleSpellcheck(body) {
   if (!Array.isArray(body.items) || !body.items.length) throw new Error('ไม่มีข้อความให้ตรวจ')
-  const parsed = extractJson(await callOpenRouter(buildSpellPrompt(body), body.ai || {}))
+  const parsed = extractJson(await callAi(buildSpellPrompt(body), body.ai || {}))
   const valid = new Set(body.items.map((it) => Number(it.i)))
-  return { fixes: (parsed.fixes || []).filter((f) => valid.has(Number(f.i)) && String(f.fixed || '').trim()).map((f) => ({ i: Number(f.i), fixed: String(f.fixed).trim(), reason: String(f.reason || '').trim() })) }
+  const flags = (parsed.flags || []).filter((f) => valid.has(Number(f.i))).map((f) => ({ i: Number(f.i), reason: String(f.reason || '').trim().slice(0, 80) }))
+  const flagged = new Set(flags.map((f) => f.i))
+  return {
+    fixes: (parsed.fixes || []).filter((f) => valid.has(Number(f.i)) && !flagged.has(Number(f.i)) && String(f.fixed || '').trim()).map((f) => ({ i: Number(f.i), fixed: String(f.fixed).trim(), reason: String(f.reason || '').trim() })),
+    flags,
+  }
 }
 
 function buildAssignPrompt(body) {
@@ -657,7 +718,7 @@ function buildAssignPrompt(body) {
 }
 async function handleAssign(body) {
   if (!Array.isArray(body.codes) || !Array.isArray(body.verbatims) || !body.verbatims.length) throw new Error('ต้องมีทั้งรหัสและคำตอบ')
-  const parsed = extractJson(await callOpenRouter(buildAssignPrompt(body), body.ai || {}))
+  const parsed = extractJson(await callAi(buildAssignPrompt(body), body.ai || {}))
   const raw = Array.isArray(parsed.assign) ? parsed.assign : []
   return { assign: Array.from({ length: body.verbatims.length }, (_, i) => {
     const n = Number(raw[i]); return Number.isInteger(n) && n >= 0 && n < body.codes.length ? n : -1
@@ -834,7 +895,7 @@ async function handleGroupCE(body) {
   if (!Array.isArray(body.codes) || !Array.isArray(body.verbatims) || !body.verbatims.length) throw new Error('ต้องมีรหัสและคำตอบ')
   let parsed
   try {
-    parsed = extractJson(await callOpenRouter(buildGroupCePrompt(body), body.ai || {}))
+    parsed = extractJson(await callAi(buildGroupCePrompt(body), body.ai || {}))
   } catch (e) {
     // Group CE ต้องไม่ล้มแล้วปล่อยงานค้าง: ถ้า AI/Provider ล่ม ให้ cluster แบบ rule/fuzzy แล้วสร้าง code ให้ครบทุก verbatim
     return { assign: fallbackGroupCEAssign(body.verbatims, body.codes), fallback: true, reason: e.message || String(e) }
@@ -870,7 +931,7 @@ const errStatus = (e) => (Number.isInteger(e?.status) && e.status >= 400 && e.st
 const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') return send(res, 204, {}, req)
   const url = new URL(req.url, `http://${req.headers.host}`)
-  if (req.method === 'GET' && url.pathname === '/health') return send(res, 200, { ok: true, provider: 'openrouter', model: DEFAULT_MODEL, keyConfigured: !!loadSecret(), authRequired: REQUIRE_AUTH }, req)
+  if (req.method === 'GET' && url.pathname === '/health') return send(res, 200, { ok: true, provider: 'openrouter', model: DEFAULT_MODEL, keyConfigured: !!loadSecret(), omnirouteConfigured: !!loadEnvValue('OMNIROUTE_API_KEY'), authRequired: REQUIRE_AUTH }, req)
   // Confirm ของ CI ใช้ review token แทนการล็อกอิน — endpoint อื่นทั้งหมดต้องเป็นผู้ใช้ที่อนุมัติแล้ว
   if (url.pathname !== '/api/send-ci-confirm-email') {
     try {
@@ -880,6 +941,9 @@ const server = http.createServer(async (req, res) => {
       if (status >= 500) console.error(e)
       return send(res, status === 500 ? 503 : status, { error: e.message || String(e) }, req)
     }
+  }
+  if (req.method === 'GET' && url.pathname === '/api/omniroute-models') {
+    try { return send(res, 200, await listOmniRouteModels(), req) } catch (e) { return send(res, 500, { error: e.message || String(e) }, req) }
   }
   if (req.method === 'GET' && url.pathname === '/api/openrouter-models') {
     try { return send(res, 200, await listOpenRouterModels(), req) } catch (e) { return send(res, 500, { error: e.message || String(e) }, req) }

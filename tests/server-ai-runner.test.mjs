@@ -34,7 +34,7 @@ const EXPORTS = [
   'normalizeGroup', 'normalizeCoding', 'simplifyThaiLabel', 'firstMeaningfulToken', 'normalizeClusterKey',
   'levenshtein', 'closeEnoughKey', 'isNonAnswerText', 'fallbackGroupCEAssign', 'corsOrigin', 'send',
   'readBody', 'readRawBody', 'parseSavBuffer', 'sendCiConfirmEmail', 'sendCiReviewEmail',
-  'listOpenRouterModels', 'ROUTES', 'ALLOWED_ORIGINS', 'PORT', 'DEFAULT_MODEL', 'TIMEOUT_MS', 'ENV_FILE',
+  'listOpenRouterModels', 'listOmniRouteModels', 'callAi', 'callOmniRoute', 'ROUTES', 'ALLOWED_ORIGINS', 'PORT', 'DEFAULT_MODEL', 'TIMEOUT_MS', 'ENV_FILE',
   'SYSTEM_PROMPT', 'DEFAULT_RESEND_FROM',
 ]
 
@@ -214,7 +214,7 @@ test('GET /health reports config without leaking the key', async () => {
   const { state } = loadRunner()
   const res = await request(state, { method: 'GET', url: '/health' })
   assert.equal(res.status, 200)
-  assert.deepEqual(res.json(), { ok: true, provider: 'openrouter', model: 'qwen/qwen3-235b-a22b-2507', keyConfigured: true, authRequired: false })
+  assert.deepEqual(res.json(), { ok: true, provider: 'openrouter', model: 'qwen/qwen3-235b-a22b-2507', keyConfigured: true, omnirouteConfigured: false, authRequired: false })
   assert.ok(!res.body.includes('backend-key'))
   const noKey = loadRunner({ env: { OPENROUTER_ENV_FILE: FAKE_ENV_FILE } })
   assert.equal((await request(noKey.state, { method: 'GET', url: '/health' })).json().keyConfigured, false)
@@ -432,7 +432,23 @@ test('handleCode / handleReview: same normalization (scalar assign wrapped, dedu
 test('handleSpellcheck: filters to known indexes with non-empty fixes', async () => {
   const { mod } = loadRunner({ fetchImpl: () => chat('{"fixes":[{"i":"1","fixed":" ok ","reason":" r "},{"i":9,"fixed":"x"},{"i":1,"fixed":" "}]}') })
   const out = await mod.handleSpellcheck({ items: [{ i: 1, text: 't' }] })
-  assert.deepEqual(JSON.parse(JSON.stringify(out)), { fixes: [{ i: 1, fixed: 'ok', reason: 'r' }] })
+  assert.deepEqual(JSON.parse(JSON.stringify(out)), { fixes: [{ i: 1, fixed: 'ok', reason: 'r' }], flags: [] })
+})
+
+test('handleSpellcheck: flags gibberish/meaningless items for a human and never also "fixes" them', async () => {
+  let sent = ''
+  const { mod } = loadRunner({
+    fetchImpl: (_url, init) => {
+      sent = String(init?.body ?? '')
+      return chat('{"fixes":[{"i":0,"fixed":"รู้สึกดี"},{"i":1,"fixed":"ฟหก"}],"flags":[{"i":1,"reason":" พิมพ์มั่ว "},{"i":7,"reason":"x"}]}')
+    },
+  })
+  const out = await mod.handleSpellcheck({ question: 'Q5 ทำไมถึงชอบ', items: [{ i: 0, text: 'รุ้สึกดี' }, { i: 1, text: 'ฟหกดฟหก' }] })
+  assert.deepEqual(JSON.parse(JSON.stringify(out)), {
+    fixes: [{ i: 0, fixed: 'รู้สึกดี', reason: '' }],
+    flags: [{ i: 1, reason: 'พิมพ์มั่ว' }],
+  })
+  assert.match(sent, /Q5 ทำไมถึงชอบ/, 'question text is sent to the model for the off-topic check')
 })
 
 test('handleAssign: out-of-range / non-integer -> -1, length matches verbatims', async () => {
@@ -758,7 +774,7 @@ test('auth: every non-public endpoint rejects requests without a token (401) and
   const { state } = loadRunner({ env: AUTH_ENV, auth: true, fetchImpl: authFetch(), curlImpl: resendOk() })
   const cases = [
     ['POST', '/api/ai-group'], ['POST', '/api/ai-code'], ['POST', '/api/ai-review'], ['POST', '/api/ai-spellcheck'],
-    ['POST', '/api/ai-assign'], ['POST', '/api/ai-group-ce'], ['GET', '/api/openrouter-models'], ['POST', '/api/parse-sav'],
+    ['POST', '/api/ai-assign'], ['POST', '/api/ai-group-ce'], ['GET', '/api/openrouter-models'], ['GET', '/api/omniroute-models'], ['POST', '/api/parse-sav'],
     ['POST', '/api/send-ci-review-email'], ['POST', '/api/unknown'],
   ]
   for (const [method, url] of cases) {
@@ -860,4 +876,31 @@ test('auth project matches the frontend Firebase Auth/Firestore project (not the
   assert.ok(frontendProject && runnerProject)
   assert.equal(runnerProject, frontendProject)
   assert.notEqual(runnerProject, 'codeframe-dp', 'codeframe-dp is Hosting only')
+})
+
+test('OmniRoute: provider "omniroute" goes to the local OpenAI-compatible gateway with the backend key', async () => {
+  const calls = []
+  const { mod } = loadRunner({
+    env: { AI_RUNNER_REQUIRE_AUTH: '0', OPENROUTER_API_KEY: 'or-key', OMNIROUTE_API_KEY: 'omni-key', OMNIROUTE_BASE_URL: 'http://127.0.0.1:20128/v1/', OPENROUTER_ENV_FILE: FAKE_ENV_FILE },
+    fetchImpl: (url, init) => { calls.push({ url, init }); return chat('{"fixes":[],"flags":[]}') },
+  })
+  const out = await mod.handleSpellcheck({ items: [{ i: 0, text: 'ดี' }], ai: { provider: 'omniroute', model: 'kr/claude-sonnet-4.5' } })
+  assert.deepEqual(JSON.parse(JSON.stringify(out)), { fixes: [], flags: [] })
+  assert.equal(calls[0].url, 'http://127.0.0.1:20128/v1/chat/completions')
+  assert.equal(calls[0].init.headers.Authorization, 'Bearer omni-key')
+  assert.equal(JSON.parse(calls[0].init.body).model, 'kr/claude-sonnet-4.5')
+  // provider อื่นยังไป OpenRouter เหมือนเดิม
+  await mod.handleSpellcheck({ items: [{ i: 0, text: 'ดี' }], ai: { provider: 'openrouter', model: 'qwen/x' } })
+  assert.match(calls[1].url, /openrouter\.ai/)
+})
+
+test('OmniRoute: missing key / model gives a clear error; models list is mapped', async () => {
+  let { mod } = loadRunner({ env: { AI_RUNNER_REQUIRE_AUTH: '0', OPENROUTER_ENV_FILE: FAKE_ENV_FILE }, fetchImpl: () => chat('{}') })
+  await assert.rejects(mod.callOmniRoute('x', { model: 'm' }), /OMNIROUTE_API_KEY is not configured/)
+  ;({ mod } = loadRunner({
+    env: { AI_RUNNER_REQUIRE_AUTH: '0', OMNIROUTE_API_KEY: 'k', OPENROUTER_ENV_FILE: FAKE_ENV_FILE },
+    fetchImpl: () => okJson({ data: [{ id: 'b/y' }, { id: 'a/x', name: 'A X' }, {}] }),
+  }))
+  await assert.rejects(mod.callOmniRoute('x', {}), /ยังไม่ได้เลือกโมเดล/)
+  assert.deepEqual(JSON.parse(JSON.stringify(await mod.listOmniRouteModels())), { models: [{ id: 'a/x', name: 'A X' }, { id: 'b/y', name: 'b/y' }] })
 })

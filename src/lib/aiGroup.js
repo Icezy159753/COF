@@ -1,12 +1,13 @@
 // ---------- ตั้งค่า AI Provider (SuperAdmin กำหนด, เก็บใน settings/global) ----------
-export const AI_PROVIDERS = ['claude', 'openrouter', 'codex']
+export const AI_PROVIDERS = ['claude', 'openrouter', 'codex', 'omniroute']
 
 export const DEFAULT_AI_CONFIG = {
-  provider: 'openrouter', // 'claude' | 'openrouter' | 'codex'
+  provider: 'openrouter', // 'claude' | 'openrouter' | 'codex' | 'omniroute'
   claudeModel: 'sonnet', // alias ของ Claude CLI: 'sonnet' | 'haiku' | 'opus'
   openrouterApiKey: '',
   openrouterModel: 'qwen/qwen3-235b-a22b-2507',
   codexModel: '', // ว่าง = ใช้โมเดลเริ่มต้นของ Codex (เช่น gpt-5.5)
+  omnirouteModel: '', // model id ของ OmniRoute บน runner (key/URL ตั้งที่ server เท่านั้น)
 }
 
 import { authHeaders } from './apiAuth.js'
@@ -33,11 +34,29 @@ export async function fetchOpenRouterModels() {
   return (await res.json()).models || []
 }
 
+// รายชื่อโมเดลจาก OmniRoute บน runner (ต้องตั้ง OMNIROUTE_API_KEY ที่ server ก่อน)
+export async function fetchOmniRouteModels() {
+  const res = await fetch(apiUrl('/api/omniroute-models'), { headers: await authHeaders() })
+  if (!res.ok) {
+    let msg = `เซิร์ฟเวอร์ตอบกลับ HTTP ${res.status}`
+    try {
+      msg = (await res.json()).error || msg
+    } catch {
+      /* ignore */
+    }
+    throw new Error(msg)
+  }
+  return (await res.json()).models || []
+}
+
 // แปลง config (ที่ SuperAdmin ตั้ง) → payload ที่ส่งให้ server ต่อ 1 request
 export function toAiPayload(cfg) {
   const c = { ...DEFAULT_AI_CONFIG, ...(cfg || {}) }
   if (c.provider === 'openrouter') {
     return { provider: 'openrouter', model: c.openrouterModel, ...(ALLOW_DIRECT_OPENROUTER ? { apiKey: c.openrouterApiKey } : {}) }
+  }
+  if (c.provider === 'omniroute') {
+    return { provider: 'omniroute', model: c.omnirouteModel || undefined }
   }
   if (c.provider === 'codex') {
     return { provider: 'codex', model: c.codexModel || undefined }
@@ -69,10 +88,11 @@ export async function aiReviewAnswers(verbatims) {
   return postJson('/api/ai-review', { verbatims })
 }
 
-// ตรวจตัวสะกด/รูปประโยคของ Verbatim (ไม่เปลี่ยนความหมาย)
-// items = [{ i, text }] → คืน { fixes: [{ i, fixed, reason }] } เฉพาะรายการที่แก้
-export async function aiSpellcheck(items) {
-  return postJson('/api/ai-spellcheck', { items })
+// ตรวจตัวสะกดของ Verbatim (ไม่เปลี่ยนความหมาย) + ชี้คำตอบที่มั่ว/อ่านไม่ออก/ไม่ได้ใจความ ให้คนเช็ค
+// items = [{ i, text }] · question = โจทย์ของข้อ (ถ้ามี ใช้ดูว่าตอบไม่ตรงคำถาม)
+//   → คืน { fixes: [{ i, fixed, reason }], flags: [{ i, reason }] }
+export async function aiSpellcheck(items, question = '') {
+  return postJson('/api/ai-spellcheck', { items, question })
 }
 
 // จับ verbatim 'อื่นๆ ระบุ' เข้ารหัสที่มีอยู่ (จาก SPSS value labels)
@@ -220,11 +240,13 @@ function normalizeGroupCE(parsed, codeCount, verbatimCount) {
   return { assign }
 }
 
-function buildSpellcheckPrompt(items) {
+function buildSpellcheckPrompt(items, question = '') {
   const lines = items.map((it) => `${it.i}\t${it.text}`)
   return [
-    'You are a meticulous Thai proofreader. Fix spelling/spacing/grammar without changing meaning.',
-    'Omit lines already correct. Return ONLY JSON: {"fixes":[{"i":<index>,"fixed":"<corrected thai text>","reason":"<short thai note>"}]}',
+    'You are a meticulous Thai proofreader for survey answers. Fix ONLY spelling/tone marks/obvious typos without changing meaning.',
+    'Also flag answers a human must review: gibberish, unreadable, not meaningful, or clearly unrelated to the question. Do not flag short meaningful answers. Flagged lines must not be in fixes.',
+    'Omit lines already correct. Return ONLY JSON: {"fixes":[{"i":<index>,"fixed":"<corrected thai text>","reason":"<short thai note>"}],"flags":[{"i":<index>,"reason":"<short thai note>"}]}',
+    ...(question ? ['', `Question: ${String(question).slice(0, 500)}`] : []),
     '', 'Lines:', ...lines,
   ].join('\n')
 }
@@ -236,7 +258,13 @@ function normalizeSpellcheck(parsed, validIndexes) {
     const fixed = String(f?.fixed ?? '').trim()
     if (Number.isInteger(i) && validIndexes.has(i) && fixed) fixes.push({ i, fixed, reason: String(f?.reason ?? '').trim() })
   }
-  return { fixes }
+  const flags = []
+  for (const f of parsed?.flags ?? []) {
+    const i = Number(f?.i)
+    if (Number.isInteger(i) && validIndexes.has(i)) flags.push({ i, reason: String(f?.reason ?? '').trim().slice(0, 80) })
+  }
+  const flagged = new Set(flags.map((f) => f.i))
+  return { fixes: fixes.filter((f) => !flagged.has(f.i)), flags }
 }
 
 async function runOpenRouterDirect(url, body, ai) {
@@ -262,7 +290,7 @@ async function runOpenRouterDirect(url, body, ai) {
   }
   if (url === '/api/ai-spellcheck') {
     const items = body.items ?? []
-    const parsed = extractJson(await callOpenRouterDirect(buildSpellcheckPrompt(items), ai))
+    const parsed = extractJson(await callOpenRouterDirect(buildSpellcheckPrompt(items, body.question), ai))
     return normalizeSpellcheck(parsed, new Set(items.map((it) => Number(it.i))))
   }
   throw new Error(`ยังไม่รองรับ OpenRouter direct สำหรับ ${url}`)
